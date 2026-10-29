@@ -1,0 +1,50 @@
+# --- Secrets: never commit ---
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.env
+.env.*
+!.env.example
+secrets.auto.tfvars
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+kubeconfig*
+*.sql
+*.dump
+
+# --- Terraform ---
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Java ---
+target/
+build/
+.gradle/
+*.class
+
+# --- Editors and OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
