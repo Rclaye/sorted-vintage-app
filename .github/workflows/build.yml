@@ -1,0 +1,165 @@
+# T029: build, test, scan and publish each changed service, then hand the new image tag to the
+# GitOps repo. Pull requests stop after the Trivy scan. On main the image is pushed to GHCR and
+# the sv-deployer GitHub App opens a pull request in the gitops repo that sets the dev tag and
+# merges once its checks pass. Nothing here holds cluster credentials (Constitution I).
+name: build
+
+on:
+  pull_request:
+    paths: ["services/**", ".github/workflows/build.yml"]
+  push:
+    branches: [main]
+    paths: ["services/**", ".github/workflows/build.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  changed:
+    name: changed services
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      services: ${{ steps.find.outputs.services }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: find
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          base="$PUSH_BEFORE"
+          [ "$EVENT" = pull_request ] && base="$PR_BASE"
+          # A new branch or a change to this workflow builds every service.
+          if [ -z "$base" ] || [ "${base//0/}" = "" ] || \
+             git diff --name-only "$base" "$HEAD_SHA" | grep -qx '.github/workflows/build.yml'; then
+            dirs="$(ls -d services/*/ | cut -d/ -f2)"
+          else
+            dirs="$(git diff --name-only "$base" "$HEAD_SHA" | sed -n 's|^services/\([^/]*\)/.*|\1|p' | sort -u)"
+          fi
+          list=""
+          for d in $dirs; do
+            [ -f "services/$d/Dockerfile" ] && list="$list $d"
+          done
+          services="$(printf '%s\n' $list | jq -R . | jq -sc 'map(select(length > 0))')"
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+          echo "Changed services: $services"
+
+  build:
+    name: build ${{ matrix.service }}
+    needs: changed
+    if: needs.changed.outputs.services != '[]'
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changed.outputs.services) }}
+    env:
+      IMAGE: ghcr.io/rclaye/sv-${{ matrix.service }}
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/${{ matrix.service }}/requirements-dev.txt
+      - name: Install
+        run: pip install -r requirements-dev.txt
+      - name: Lint
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Test
+        run: pytest --cov --cov-report=xml
+      # T105 adds the SonarQube Cloud scan here, after the tests.
+      - uses: docker/setup-buildx-action@v3
+      - name: Build linux/arm64
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          platforms: linux/arm64
+          load: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - name: Trivy (fail on critical)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ github.sha }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+
+  deploy:
+    name: deploy ${{ matrix.service }} to dev
+    needs: [changed, build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04-arm
+    concurrency:
+      group: deploy-${{ matrix.service }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changed.outputs.services) }}
+    steps:
+      - id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.SV_DEPLOYER_CLIENT_ID }}
+          private-key: ${{ secrets.SV_DEPLOYER_PRIVATE_KEY }}
+          owner: rclaye
+          repositories: sorted-vintage-gitops
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@v4
+        with:
+          repository: rclaye/sorted-vintage-gitops
+          token: ${{ steps.app.outputs.token }}
+      - name: Set the dev tag and open the pull request
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          SERVICE: ${{ matrix.service }}
+          TAG: ${{ github.sha }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+        run: |
+          set -euo pipefail
+          scripts/set-image-tag.py set "$SERVICE" dev "$TAG"
+          user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          branch="deploy/${SERVICE}-${TAG:0:12}"
+          git switch -c "$branch"
+          git commit -am "deploy: ${SERVICE} ${TAG:0:12} to dev"
+          git push origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "deploy: ${SERVICE} ${TAG:0:12} to dev" \
+            --body "Sets the dev image tag of \`${SERVICE}\` to \`${TAG}\`, built from ${SOURCE}. Merges on its own once the checks pass."
+          gh pr merge "$branch" --auto --squash --delete-branch
