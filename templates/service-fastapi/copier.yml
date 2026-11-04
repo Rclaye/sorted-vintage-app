@@ -1,0 +1,33 @@
+# Copier template for a Sorted Vintage FastAPI service (T027, FR-026).
+# Generate with:  copier copy templates/service-fastapi services/<name>
+_subdirectory: template
+_templates_suffix: .jinja
+_min_copier_version: "9.0.0"
+
+service_name:
+  type: str
+  help: Service name, lower-case with dashes. The image is ghcr.io/rclaye/sv-<name>.
+  validator: >-
+    {% if not (service_name | regex_search('^[a-z][a-z0-9-]{1,30}$')) %}
+    Use lower-case letters, digits and dashes, starting with a letter.
+    {% endif %}
+
+service_description:
+  type: str
+  help: One line describing what the service does.
+  default: "Sorted Vintage {{ service_name }} service"
+
+audience:
+  type: str
+  help: Keycloak audience (client name) that tokens for this service must carry.
+  default: "{{ service_name }}"
+
+uses_database:
+  type: bool
+  help: Does the service have a Postgres database? /healthz then checks it.
+  default: true
+
+uses_queue:
+  type: bool
+  help: Does the service use RabbitMQ? /healthz then checks it.
+  default: false

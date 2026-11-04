@@ -1,0 +1,57 @@
+# Meets the T026 policies: non-root, CPU and memory requests and limits, image from ghcr.io/rclaye/.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ service_name }}
+  labels: { app.kubernetes.io/name: {{ service_name }} }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: {{ service_name }} }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: {{ service_name }} }
+    spec:
+      serviceAccountName: {{ service_name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: {{ service_name }}
+          image: ghcr.io/rclaye/sv-{{ service_name }}:unset # the tag is set per overlay by the build workflow
+          ports:
+            - { name: http, containerPort: 8000 }
+          env:
+            - { name: SERVICE_NAME, value: {{ service_name }} }
+            - { name: JWT_AUDIENCE, value: {{ audience }} }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.monitoring:4318" }
+{%- if uses_database %}
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: {{ service_name }}-db-app, key: uri } }
+{%- endif %}
+{%- if uses_queue %}
+            - name: AMQP_URL
+              valueFrom: { secretKeyRef: { name: {{ service_name }}-amqp, key: url } }
+{%- endif %}
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http } # not /healthz: a database outage must not restart the pod
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
