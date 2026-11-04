@@ -35,7 +35,10 @@ def create_app(
             raise RuntimeError("JWKS_URL is not set: the service cannot verify tokens without it.")
         keys = KeycloakKeys(settings.jwks_url)
 
-    app = FastAPI(title=settings.service_name, description="{{ service_description }}")
+    app = FastAPI(
+        title=settings.service_name,
+        description="{{ service_description }}",  # noqa: E501
+    )
     app.state.settings = settings
     install_error_handlers(app)
 
