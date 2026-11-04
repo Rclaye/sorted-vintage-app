@@ -134,13 +134,13 @@ jobs:
         with:
           client-id: ${{ vars.SV_DEPLOYER_CLIENT_ID }}
           private-key: ${{ secrets.SV_DEPLOYER_PRIVATE_KEY }}
-          owner: rclaye
+          owner: Rclaye
           repositories: sorted-vintage-gitops
           permission-contents: write
           permission-pull-requests: write
       - uses: actions/checkout@v4
         with:
-          repository: rclaye/sorted-vintage-gitops
+          repository: Rclaye/sorted-vintage-gitops
           token: ${{ steps.app.outputs.token }}
       - name: Set the dev tag and open the pull request
         env:
@@ -155,7 +155,7 @@ jobs:
           user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-          branch="deploy/${SERVICE}-${TAG:0:12}"
+          branch="deploy/${SERVICE}-dev-${TAG:0:12}"
           git switch -c "$branch"
           git commit -am "deploy: ${SERVICE} ${TAG:0:12} to dev"
           git push origin "$branch"
