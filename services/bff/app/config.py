@@ -13,8 +13,10 @@ class Settings:
     service_name: str = "bff"
     env: str = "local"
     log_level: str = "INFO"
-    # Keycloak: tokens must be signed by a key in jwks_url and carry this audience.
-    jwt_audience: str = "bff"
+    # Keycloak: tokens must be signed by a key in jwks_url. Then either aud must contain
+    # jwt_audience, or (jwt_audience empty) azp must equal jwt_azp.
+    jwt_audience: str = ""
+    jwt_azp: str = "bff"
     jwt_issuer: str = ""
     jwks_url: str = ""
     # Dependencies that /healthz probes with a TCP connect. Empty means not used.
@@ -33,6 +35,7 @@ class Settings:
             env=env.get("ENV", defaults.env),
             log_level=env.get("LOG_LEVEL", defaults.log_level).upper(),
             jwt_audience=env.get("JWT_AUDIENCE", defaults.jwt_audience),
+            jwt_azp=env.get("JWT_AZP", defaults.jwt_azp),
             jwt_issuer=env.get("JWT_ISSUER", ""),
             jwks_url=env.get("JWKS_URL", ""),
             database_url=env.get("DATABASE_URL", ""),

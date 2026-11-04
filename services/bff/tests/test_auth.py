@@ -1,7 +1,7 @@
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from tests.conftest import AUDIENCE
+from tests.conftest import AUDIENCE, AZP
 
 
 def bearer(token: str) -> dict:
@@ -38,14 +38,34 @@ def test_expired_token_is_401(client, make_token):
     assert response.json()["error"] == "token_expired"
 
 
+@pytest.mark.skipif(not AUDIENCE, reason="this service checks azp, not aud")
 def test_wrong_audience_is_401(client, make_token):
     response = client.get("/ping", headers=bearer(make_token(aud="someone-else")))
     assert response.status_code == 401
     assert response.json()["error"] == "invalid_token"
 
 
+@pytest.mark.skipif(not AUDIENCE, reason="this service checks azp, not aud")
 def test_missing_audience_is_401(client, make_token):
     assert client.get("/ping", headers=bearer(make_token(aud=None))).status_code == 401
+
+
+@pytest.mark.skipif(not AZP, reason="this service checks aud, not azp")
+def test_wrong_authorized_party_is_401(client, make_token):
+    response = client.get("/ping", headers=bearer(make_token(azp="another-client")))
+    assert response.status_code == 401
+    assert response.json()["error"] == "invalid_token"
+
+
+@pytest.mark.skipif(not AZP, reason="this service checks aud, not azp")
+def test_missing_authorized_party_is_401(client, make_token):
+    assert client.get("/ping", headers=bearer(make_token(azp=None))).status_code == 401
+
+
+@pytest.mark.skipif(not AZP, reason="this service checks aud, not azp")
+def test_other_services_audiences_are_fine_when_azp_matches(client, make_token):
+    token = make_token(aud=["listings", "orders", "payments"])
+    assert client.get("/ping", headers=bearer(token)).status_code == 200
 
 
 def test_wrong_issuer_is_401(client, make_token):
@@ -62,7 +82,8 @@ def test_token_signed_by_another_key_is_401(client, make_token):
 def test_unsigned_token_is_401(client):
     import jwt
 
-    token = jwt.encode({"aud": AUDIENCE, "exp": 9999999999}, key=None, algorithm="none")
+    claims = {"aud": AUDIENCE or "x", "azp": AZP, "exp": 9999999999}
+    token = jwt.encode(claims, key=None, algorithm="none")
     assert client.get("/ping", headers=bearer(token)).status_code == 401
 
 

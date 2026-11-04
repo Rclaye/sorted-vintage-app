@@ -1,8 +1,8 @@
 # Changes here will be overwritten by Copier
 _src_path: templates/service-fastapi
-audience: bff
 service_description: 'Browser-facing backend: OIDC session and server-rendered pages
     (stub: /healthz and /metrics)'
 service_name: bff
+token_check: azp
 uses_database: false
 uses_queue: false

@@ -18,7 +18,9 @@ from app.config import Settings
 from app.logging_json import JsonFormatter
 from app.main import create_app
 
-AUDIENCE = "bff"
+# What this service is configured to demand: an audience, or (BFF) an authorized party.
+AUDIENCE = Settings().jwt_audience
+AZP = Settings().jwt_azp
 ISSUER = "http://keycloak.test/realms/sv-test"
 
 
@@ -44,7 +46,8 @@ def make_token(private_key) -> Callable[..., str]:
         now = int(time.time())
         claims = {
             "sub": "user-1",
-            "aud": AUDIENCE,
+            "aud": AUDIENCE or ["listings", "orders", "payments"],
+            "azp": AZP or "some-client",
             "iss": ISSUER,
             "iat": now,
             "exp": now + 300,

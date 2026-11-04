@@ -26,7 +26,7 @@ spec:
             - { name: http, containerPort: 8000 }
           env:
             - { name: SERVICE_NAME, value: bff }
-            - { name: JWT_AUDIENCE, value: bff }
+            - { name: JWT_AZP, value: bff }
             - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.monitoring:4318" }
           readinessProbe:
             httpGet: { path: /healthz, port: http }
