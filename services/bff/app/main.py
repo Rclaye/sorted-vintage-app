@@ -27,6 +27,7 @@ def create_app(
 ) -> FastAPI:
     """Tests pass fakes for keys, checks and tracer_provider; production reads the environment."""
     settings = settings or Settings.from_env()
+    settings.validate()
     configure_logging(settings.service_name, settings.env, settings.log_level)
     if checks is None:
         checks = checks_from_settings(settings.database_url, settings.amqp_url)

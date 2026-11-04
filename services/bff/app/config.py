@@ -26,6 +26,13 @@ class Settings:
     otlp_endpoint: str = ""
     public_paths: tuple[str, ...] = ("/healthz", "/metrics")
 
+    def validate(self) -> None:
+        """Fail closed: an empty issuer, audience or azp would silently switch a check off."""
+        if not self.jwt_issuer:
+            raise RuntimeError("JWT_ISSUER is not set: tokens cannot be verified without it.")
+        if not (self.jwt_audience or self.jwt_azp):
+            raise RuntimeError("Set JWT_AUDIENCE or JWT_AZP: a service must check one of them.")
+
     @classmethod
     def from_env(cls) -> "Settings":
         env = os.environ

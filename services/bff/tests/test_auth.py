@@ -68,6 +68,20 @@ def test_other_services_audiences_are_fine_when_azp_matches(client, make_token):
     assert client.get("/ping", headers=bearer(token)).status_code == 200
 
 
+def test_id_token_is_401(client, make_token):
+    response = client.get("/ping", headers=bearer(make_token(typ="ID")))
+    assert response.status_code == 401
+    assert response.json()["error"] == "invalid_token"
+
+
+def test_token_without_typ_is_401(client, make_token):
+    assert client.get("/ping", headers=bearer(make_token(typ=None))).status_code == 401
+
+
+def test_token_without_issuer_is_401(client, make_token):
+    assert client.get("/ping", headers=bearer(make_token(iss=None))).status_code == 401
+
+
 def test_wrong_issuer_is_401(client, make_token):
     assert client.get("/ping", headers=bearer(make_token(iss="http://evil"))).status_code == 401
 

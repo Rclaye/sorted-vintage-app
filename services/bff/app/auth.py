@@ -46,6 +46,8 @@ class JWTAuthMiddleware:
         issuer: str = "",
         public_paths: tuple[str, ...] = ("/healthz", "/metrics"),
     ):
+        if not issuer or not (audience or authorized_party):
+            raise ValueError("JWT issuer and an audience or authorized party are required.")
         self.app = app
         self.keys = keys
         self.audience = audience
@@ -78,12 +80,15 @@ class JWTAuthMiddleware:
                 key,
                 algorithms=ALGORITHMS,
                 audience=self.audience or None,
-                issuer=self.issuer or None,
+                issuer=self.issuer,
                 options={
-                    "require": ["exp", "aud"] if self.audience else ["exp"],
+                    "require": ["exp", "iss", "aud"] if self.audience else ["exp", "iss"],
                     "verify_aud": bool(self.audience),
                 },
             )
+            # Access tokens only: a Keycloak ID token has the same signature, aud and azp.
+            if claims.get("typ") != "Bearer":
+                raise jwt.InvalidTokenError("not an access token")
             if self.authorized_party and claims.get("azp") != self.authorized_party:
                 raise jwt.InvalidTokenError("wrong authorized party")
         except jwt.ExpiredSignatureError:
