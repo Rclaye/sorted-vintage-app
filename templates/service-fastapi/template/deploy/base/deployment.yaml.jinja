@@ -26,14 +26,22 @@ spec:
             - { name: http, containerPort: 8000 }
           env:
             - { name: SERVICE_NAME, value: {{ service_name }} }
-            - { name: JWT_AUDIENCE, value: {{ audience }} }
+{%- if token_check == 'audience' %}
+            - { name: JWT_AUDIENCE, value: {{ service_name }} }
+{%- else %}
+            - { name: JWT_AZP, value: {{ service_name }} }
+{%- endif %}
             - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.monitoring:4318" }
 {%- if uses_database %}
-            - name: DATABASE_URL
-              valueFrom: { secretKeyRef: { name: {{ service_name }}-db-app, key: uri } }
+            # Secret from Terraform; each overlay adds DATABASE_URL built from these two.
+            - name: DB_USER
+              valueFrom: { secretKeyRef: { name: pg-{{ service_name }}-app, key: username } }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: pg-{{ service_name }}-app, key: password } }
 {%- endif %}
 {%- if uses_queue %}
             - name: AMQP_URL
+              # Placeholder until per-service RabbitMQ users exist (Messaging Topology Operator).
               valueFrom: { secretKeyRef: { name: {{ service_name }}-amqp, key: url } }
 {%- endif %}
           readinessProbe:

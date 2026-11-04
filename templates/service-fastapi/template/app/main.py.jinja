@@ -65,6 +65,7 @@ def create_app(
         JWTAuthMiddleware,
         keys=keys,
         audience=settings.jwt_audience,
+        authorized_party=settings.jwt_azp,
         issuer=settings.jwt_issuer,
         public_paths=settings.public_paths,
     )

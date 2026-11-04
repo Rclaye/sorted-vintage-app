@@ -17,10 +17,14 @@ service_description:
   help: One line describing what the service does.
   default: "Sorted Vintage {{ service_name }} service"
 
-audience:
+token_check:
   type: str
-  help: Keycloak audience (client name) that tokens for this service must carry.
-  default: "{{ service_name }}"
+  help: >-
+    audience: tokens must carry this service's name in aud (resource services).
+    azp: tokens must come from this service's own client (azp), for a BFF whose user
+    tokens carry other services' audiences.
+  choices: [audience, azp]
+  default: audience
 
 uses_database:
   type: bool

@@ -41,13 +41,15 @@ class JWTAuthMiddleware:
         self,
         app: ASGIApp,
         keys: KeyResolver,
-        audience: str,
+        audience: str = "",
+        authorized_party: str = "",
         issuer: str = "",
         public_paths: tuple[str, ...] = ("/healthz", "/metrics"),
     ):
         self.app = app
         self.keys = keys
         self.audience = audience
+        self.authorized_party = authorized_party
         self.issuer = issuer
         self.public_paths = public_paths
 
@@ -75,10 +77,15 @@ class JWTAuthMiddleware:
                 token,
                 key,
                 algorithms=ALGORITHMS,
-                audience=self.audience,
+                audience=self.audience or None,
                 issuer=self.issuer or None,
-                options={"require": ["exp", "aud"]},
+                options={
+                    "require": ["exp", "aud"] if self.audience else ["exp"],
+                    "verify_aud": bool(self.audience),
+                },
             )
+            if self.authorized_party and claims.get("azp") != self.authorized_party:
+                raise jwt.InvalidTokenError("wrong authorized party")
         except jwt.ExpiredSignatureError:
             return self._unauthorized("token_expired", "The token has expired.")
         except jwt.PyJWKClientConnectionError:
