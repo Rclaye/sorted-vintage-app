@@ -46,6 +46,7 @@ def make_token(private_key) -> Callable[..., str]:
         now = int(time.time())
         claims = {
             "sub": "user-1",
+            "typ": "Bearer",
             "aud": AUDIENCE or ["listings", "orders", "payments"],
             "azp": AZP or "some-client",
             "iss": ISSUER,
