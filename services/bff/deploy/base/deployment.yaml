@@ -1,0 +1,49 @@
+# Meets the T026 policies: non-root, CPU and memory requests and limits, image from ghcr.io/rclaye/.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bff
+  labels: { app.kubernetes.io/name: bff }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: bff }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: bff }
+    spec:
+      serviceAccountName: bff
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: bff
+          image: ghcr.io/rclaye/sv-bff:unset # the tag is set per overlay by the build workflow
+          ports:
+            - { name: http, containerPort: 8000 }
+          env:
+            - { name: SERVICE_NAME, value: bff }
+            - { name: JWT_AZP, value: bff }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.monitoring:4318" }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http } # not /healthz: a database outage must not restart the pod
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
