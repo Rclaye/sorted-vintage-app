@@ -183,6 +183,8 @@ requests==2.34.2
     #   -r requirements.txt
     #   opentelemetry-exporter-http-transport
     #   opentelemetry-exporter-otlp-proto-http
+ruff==0.17.3
+    # via -r requirements-dev.in
 starlette==1.10.0
     # via
     #   -r requirements.txt
