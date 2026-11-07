@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: listings
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 11MB
+
+server:
+  port: 8080
+  shutdown: graceful
+
+logging:
+  structured:
+    format:
+      console: lab.sortedvintage.listings.logging.LabJsonFormatter
+
+management:
+  endpoints:
+    web:
+      base-path: /
+      exposure:
+        include: health,prometheus
+      path-mapping:
+        health: healthz
+        prometheus: metrics
+  endpoint:
+    health:
+      show-details: never
+      status:
+        http-mapping:
+          DOWN: 503
+          OUT_OF_SERVICE: 503
+  observations:
+    http:
+      server:
+        requests:
+          name: http.server.request.duration
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.request.duration: true
