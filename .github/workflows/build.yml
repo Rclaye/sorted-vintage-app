@@ -1,4 +1,4 @@
-# T029: build, test, scan and publish each changed service, then hand the new image tag to the
+# T029, T116: build, test, scan and publish each changed service, then hand the new image tag to the
 # GitOps repo. Pull requests stop after the Trivy scan. On main the image is pushed to GHCR and
 # the sv-deployer GitHub App opens a pull request in the gitops repo that sets the dev tag and
 # merges once its checks pass. Nothing here holds cluster credentials (Constitution I).
@@ -68,19 +68,39 @@ jobs:
         working-directory: services/${{ matrix.service }}
     steps:
       - uses: actions/checkout@v4
+      - id: kind
+        name: Detect the build tool
+        run: |
+          if [ -f build.gradle.kts ]; then echo "java=true" >> "$GITHUB_OUTPUT"; else echo "java=false" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/setup-python@v5
+        if: steps.kind.outputs.java != 'true'
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: services/${{ matrix.service }}/requirements-dev.txt
       - name: Install
+        if: steps.kind.outputs.java != 'true'
         run: pip install -r requirements-dev.txt
       - name: Lint
+        if: steps.kind.outputs.java != 'true'
         run: |
           ruff check .
           ruff format --check .
       - name: Test
+        if: steps.kind.outputs.java != 'true'
         run: pytest --cov --cov-report=xml
+      - uses: actions/setup-java@v4
+        if: steps.kind.outputs.java == 'true'
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            services/${{ matrix.service }}/*.gradle*
+            services/${{ matrix.service }}/gradle/wrapper/gradle-wrapper.properties
+      - name: Test (Gradle)
+        if: steps.kind.outputs.java == 'true'
+        run: ./gradlew --no-daemon build jacocoTestReport
       - name: SonarQube Cloud scan
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
@@ -157,7 +177,7 @@ jobs:
           SOURCE: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
         run: |
           set -euo pipefail
-          scripts/set-image-tag.py set "$SERVICE" dev "$TAG"
+          scripts/set-image-tag.py set "$SERVICE" dev "$TAG" --first-replicas 1
           user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
