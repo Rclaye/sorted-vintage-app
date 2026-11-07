@@ -12,6 +12,7 @@ secrets.auto.tfvars
 !*.tfvars.example
 kubeconfig*
 *.sql
+!services/*/src/main/resources/db/migration/*.sql
 *.dump
 
 # --- Terraform ---

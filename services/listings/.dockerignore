@@ -1,0 +1,8 @@
+.gradle
+src
+gradle
+gradlew
+gradlew.bat
+*.kts
+build/*
+!build/libs/listings.jar
