@@ -118,6 +118,9 @@ jobs:
           tags: ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      - name: Check the image starts with its agent as its own user
+        if: steps.kind.outputs.java == 'true'
+        run: docker run --rm --entrypoint java "$IMAGE:${{ github.sha }}" -javaagent:/opt/otel/opentelemetry-javaagent.jar -version
       - name: Trivy (fail on critical)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
