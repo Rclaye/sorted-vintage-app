@@ -1,0 +1,10 @@
+# Prometheus picks up every ServiceMonitor in every namespace; no labels needed.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: payments
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/name: payments }
+  endpoints:
+    - { port: http, path: /metrics, interval: 30s }

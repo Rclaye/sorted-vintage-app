@@ -1,0 +1,8 @@
+# Changes here will be overwritten by Copier
+_src_path: templates/service-fastapi
+service_description: Stripe Connect onboarding, payout status, webhooks and reconciliation
+    (Accounts v2)
+service_name: payments
+token_check: audience
+uses_database: true
+uses_queue: false
