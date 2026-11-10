@@ -18,7 +18,7 @@ import org.springframework.stereotype.Repository;
 public class ListingRepository {
 
     /** The columns every view needs; {@code l} is listing, {@code s} seller_profile. */
-    static final String SELECT = """
+    public static final String SELECT = """
             select l.id, l.seller_sub, s.display_name, l.title, l.brand, l.category, l.size, l.condition,
                    l.price_cents, l.description, l.status, l.version, l.published_at
             from listing l join seller_profile s on s.account_sub = l.seller_sub

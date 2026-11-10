@@ -23,6 +23,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import lab.sortedvintage.listings.photo.PendingPhotoCleanup;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -125,6 +126,9 @@ class ListingsContractTest {
 
     @Autowired
     JdbcTemplate jdbc;
+
+    @Autowired
+    PendingPhotoCleanup cleanup;
 
     // ---------------------------------------------------------------- POST /listings
 
@@ -688,7 +692,39 @@ class ListingsContractTest {
         }
     }
 
+    // ---------------------------------------------------------------- T039, not a route
+
+    @Nested
+    class PendingPhotoCleanupJob {
+
+        @Test
+        void removesPendingPhotosOlderThanAnHourAndTheirObjects() {
+            Seller seller = newSeller("Sam");
+            JsonNode draft = createDraft(seller, input(brand()));
+            String old = photoId(upload(draft, seller.token(), jpeg(), "a.jpg", MediaType.IMAGE_JPEG_VALUE, null));
+            String recent = photoId(upload(draft, seller.token(), jpeg(), "b.jpg", MediaType.IMAGE_JPEG_VALUE, null));
+            String stored = photoId(upload(draft, seller.token(), jpeg(), "c.jpg", MediaType.IMAGE_JPEG_VALUE, null));
+            jdbc.update("update photo set state = 'pending', created_at = now() - interval '2 hours' where id = ?::uuid",
+                    old);
+            jdbc.update("update photo set state = 'pending', created_at = now() - interval '10 minutes' where id = ?::uuid",
+                    recent);
+            jdbc.update("update photo set created_at = now() - interval '2 hours' where id = ?::uuid", stored);
+
+            assertThat(cleanup.run()).isGreaterThanOrEqualTo(1);
+
+            assertThat(jdbc.queryForList("select id::text from photo where listing_id = ?::uuid", String.class, id(draft)))
+                    .containsExactlyInAnyOrder(recent, stored);
+            assertThat(objectKeys(draft)).containsExactlyInAnyOrder(
+                    "listings/" + id(draft) + "/" + recent, "listings/" + id(draft) + "/" + stored);
+        }
+    }
+
     // ================================================================ helpers
+
+    static String photoId(Resp upload) {
+        assertThat(upload.status()).as("upload: %s", upload.raw()).isEqualTo(201);
+        return upload.body().path("id").asString();
+    }
 
     record Seller(UUID sub, String displayName) {
         String token() {
