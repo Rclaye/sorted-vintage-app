@@ -27,6 +27,8 @@ public class SecurityConfig {
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(a -> a
                         .requestMatchers("/healthz", "/metrics").permitAll()
+                        // Spring's error page: without this a 404 on a public route turns into a 401.
+                        .requestMatchers("/error").permitAll()
                         // Public reads (FR-007, FR-008). Writes and reservations need a token.
                         .requestMatchers(HttpMethod.GET, "/listings", "/listings/*", "/sellers/*").permitAll()
                         .anyRequest().authenticated())
