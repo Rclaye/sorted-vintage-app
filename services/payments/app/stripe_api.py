@@ -58,9 +58,13 @@ class StripeConnect:
     def __init__(self, client: stripe.StripeClient):
         self._client = client
 
-    def create_account(self, account_sub: str) -> tuple[str, Capabilities]:
-        """A seller's connected account with the R17 settings. Idempotent per seller."""
+    def create_account(self, account_sub: str, contact_email: str) -> tuple[str, Capabilities]:
+        """A seller's connected account with the R17 settings. Idempotent per seller.
+
+        Stripe requires a contact email on an account with the recipient configuration
+        (found in the dev sandbox, 2026-11-10)."""
         params: dict[str, Any] = {
+            "contact_email": contact_email,
             "dashboard": "none",
             "identity": {"country": "us"},
             "defaults": {
@@ -89,10 +93,12 @@ class StripeConnect:
                 "account": account_id,
                 "use_case": {
                     "type": "account_onboarding",
+                    # No "configurations" here: this API version refuses it (dev sandbox,
+                    # 2026-11-10); the account's own configurations decide what is collected.
                     "account_onboarding": {
-                        "configurations": ["merchant", "recipient"],
                         "return_url": return_url,
                         "refresh_url": refresh_url,
+                        "collection_options": {"fields": "currently_due"},
                     },
                 },
             },

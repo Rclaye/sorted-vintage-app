@@ -12,7 +12,7 @@ import logging
 from datetime import UTC, datetime
 
 import stripe
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from sqlalchemy import Engine, update
 from sqlalchemy.dialects.postgresql import insert
 
@@ -29,7 +29,7 @@ SIGNATURE_TOLERANCE_SECONDS = 300
 
 
 @router.post("/webhooks/stripe-connect")
-async def stripe_connect(request: Request) -> dict:
+async def stripe_connect(request: Request, background: BackgroundTasks) -> dict:
     payload = await request.body()
     secret = request.app.state.settings.stripe_webhook_secret
     try:
@@ -45,26 +45,53 @@ async def stripe_connect(request: Request) -> dict:
         log.warning("Connect webhook refused", extra={"reason": type(exc).__name__})
         raise ApiError(400, "invalid_signature", "The Stripe signature is not valid.") from exc
 
+    engine, connect = request.app.state.engine, request.app.state.connect
     # Database and Stripe calls are blocking, so they run off the event loop.
-    return await asyncio.to_thread(
-        handle, request.app.state.engine, request.app.state.connect, event_id, event_type, event
-    )
+    body, recheck = await asyncio.to_thread(handle, engine, connect, event_id, event_type, event)
+    if recheck:
+        delay = request.app.state.settings.event_recheck_seconds
+        background.add_task(read_again, engine, connect, recheck, delay)
+    return body
 
 
-def handle(engine: Engine, connect, event_id: str, event_type: str, event: dict) -> dict:
+def handle(
+    engine: Engine, connect, event_id: str, event_type: str, event: dict
+) -> tuple[dict, str | None]:
+    """Stores and applies one event; also returns an account to read again, if any."""
     if not store(engine, event_id, event_type, "connect_webhook", event):
         log.info("duplicate Connect event ignored", extra={"event_id": event_id})
-        return {"received": True, "duplicate": True}
+        return {"received": True, "duplicate": True}, None
 
     account_id = related_account(event)
+    recheck = None
     if event_type in ACCOUNT_EVENTS and account_id:
         try:
-            refresh_account(engine, connect, account_id)
+            if not refresh_account(engine, connect, account_id):
+                recheck = account_id
         except Exception:
             log.exception("Connect event stored but not applied", extra={"event_id": event_id})
-            return {"received": True, "applied": False}
+            return {"received": True, "applied": False}, None
     mark_applied(engine, event_id)
-    return {"received": True}
+    return {"received": True}, recheck
+
+
+async def read_again(engine: Engine, connect, account_id: str, delay_seconds: float) -> None:
+    """Stripe can send a capability event a moment before its account read shows the change
+    (seen in the dev sandbox, 2026-11-10), so an account that is not ready yet is read once more
+    after a short delay, instead of waiting for the next 5-minute reconciliation."""
+    await asyncio.sleep(delay_seconds)
+    try:
+        ready = await asyncio.to_thread(refresh_account, engine, connect, account_id)
+        log.info(
+            "account read again after an event",
+            extra={"stripe_account": account_id, "ready": ready},
+        )
+    except Exception:
+        log.warning(
+            "second read failed; reconciliation will retry",
+            extra={"stripe_account": account_id},
+            exc_info=True,
+        )
 
 
 def related_account(event: dict) -> str | None:

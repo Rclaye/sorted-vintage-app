@@ -40,6 +40,9 @@ class Settings:
     public_base_url: str = ""
     # Seconds between onboarding reconciliation runs (research R5); 0 turns the loop off (tests).
     reconcile_interval_seconds: int = 300
+    # After an account event leaves the seller not ready, read the account once more this many
+    # seconds later (Stripe's account read can lag its events slightly).
+    event_recheck_seconds: float = 10.0
 
     def validate(self) -> None:
         """Fail closed: an empty issuer, audience or azp would silently switch a check off."""
@@ -79,6 +82,9 @@ class Settings:
             stripe_secret_key=env.get("STRIPE_SECRET_KEY", ""),
             stripe_webhook_secret=env.get("STRIPE_WEBHOOK_SECRET", ""),
             public_base_url=env.get("PUBLIC_BASE_URL", "").rstrip("/"),
+            event_recheck_seconds=float(
+                env.get("EVENT_RECHECK_SECONDS", defaults.event_recheck_seconds)
+            ),
             reconcile_interval_seconds=int(
                 env.get("RECONCILE_INTERVAL_SECONDS", defaults.reconcile_interval_seconds)
             ),

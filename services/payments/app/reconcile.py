@@ -16,14 +16,16 @@ from app.stripe_api import StripeConnect
 log = logging.getLogger(__name__)
 
 
-def refresh_account(engine: Engine, connect: StripeConnect, stripe_account_id: str) -> None:
-    """Reads an account's capabilities from Stripe and records them."""
+def refresh_account(engine: Engine, connect: StripeConnect, stripe_account_id: str) -> bool:
+    """Reads an account's capabilities from Stripe and records them; True when now ready."""
     caps = connect.capabilities(stripe_account_id)
     if not accounts.apply_capabilities(engine, stripe_account_id, caps):
         log.info(
             "event for an account Payments does not know",
             extra={"stripe_account": stripe_account_id},
         )
+        return True  # nothing of ours to wait for
+    return accounts.payout_status(caps.card_payments, caps.stripe_transfers) == "ready"
 
 
 def reconcile_accounts(engine: Engine, connect: StripeConnect) -> int:

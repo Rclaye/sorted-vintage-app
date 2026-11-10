@@ -70,6 +70,7 @@ def api(settings, private_key, engine, stripe_api):
             stripe_webhook_secret=WEBHOOK_SECRET,
             public_base_url=BASE_URL,
             reconcile_interval_seconds=0,
+            event_recheck_seconds=0,
         ),
         keys=StaticKeys(private_key.public_key()),
         checks={},
@@ -84,7 +85,9 @@ def api(settings, private_key, engine, stripe_api):
 def seller(make_token):
     """A seller as the BFF's token presents them: subject, payments in aud."""
     sub = uuid.uuid4()
-    token = make_token(sub=str(sub), aud=["listings", "orders", "payments"], azp="bff")
+    token = make_token(
+        sub=str(sub), aud=["listings", "orders", "payments"], azp="bff", email=f"{sub}@example.test"
+    )
     return sub, {"Authorization": f"Bearer {token}"}
 
 
@@ -110,6 +113,42 @@ def account_json(account_id: str, card: str = "restricted", transfers: str = "re
             },
         },
     }
+
+
+def stripe_error(message: str) -> httpx.Response:
+    return httpx.Response(
+        400, json={"error": {"type": "invalid_request_error", "message": message}}
+    )
+
+
+def fake_account_create(account_id: str):
+    """Answers like the dev sandbox did on 2026-11-10, including its refusal of an account
+    with the recipient configuration and no contact email."""
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if "recipient" in body.get("configuration", {}) and not body.get("contact_email"):
+            return stripe_error(
+                "configuration.recipient: If configuration.recipient is supplied, "
+                "the Account must have a contact email."
+            )
+        return httpx.Response(200, json=account_json(account_id))
+
+    return answer
+
+
+def fake_account_link(account_id: str):
+    """Answers like the dev sandbox did on 2026-11-10: account_onboarding has no
+    configurations field in this API version."""
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        onboarding = json.loads(request.content).get("use_case", {}).get("account_onboarding", {})
+        unknown = set(onboarding) - {"return_url", "refresh_url", "collection_options"}
+        if unknown:
+            return stripe_error(f"use_case.account_onboarding.{sorted(unknown)[0]}: Unknown field.")
+        return httpx.Response(200, json=link_json(account_id))
+
+    return answer
 
 
 def link_json(account_id: str) -> dict:
@@ -194,10 +233,10 @@ class TestOnboardingLink:
         sub, auth = seller
         account_id = new_account_id()
         create = stripe_api.post("/v2/core/accounts").mock(
-            return_value=httpx.Response(200, json=account_json(account_id))
+            side_effect=fake_account_create(account_id)
         )
         links = stripe_api.post("/v2/core/account_links").mock(
-            return_value=httpx.Response(200, json=link_json(account_id))
+            side_effect=fake_account_link(account_id)
         )
 
         first = api.post("/connected-accounts/me/onboarding-link", headers=auth)
@@ -208,6 +247,7 @@ class TestOnboardingLink:
             "expires_at": "2026-11-10T04:00:00.000Z",
         }
         sent = json.loads(create.calls.last.request.content)
+        assert sent["contact_email"] == f"{sub}@example.test"
         assert sent["dashboard"] == "none"
         assert sent["identity"] == {"country": "us"}
         assert sent["defaults"]["responsibilities"] == {
@@ -266,8 +306,30 @@ class TestOnboardingLink:
             "provider_unavailable",
         )
 
+    # ------------------------------------------- GET /connected-accounts/{sub}/payout-status
 
-# ------------------------------------------- GET /connected-accounts/{sub}/payout-status
+    def test_a_token_without_an_email_is_422_and_creates_nothing(
+        self, api, engine, stripe_api, make_token
+    ):
+        sub = uuid.uuid4()
+        token = make_token(sub=str(sub), aud=["payments"], azp="bff")
+        create = stripe_api.post("/v2/core/accounts").mock(
+            side_effect=fake_account_create(new_account_id())
+        )
+
+        response = api.post(
+            "/connected-accounts/me/onboarding-link", headers={"Authorization": f"Bearer {token}"}
+        )
+
+        assert_error(response, 422, "email_required")
+        assert create.call_count == 0
+        with engine.connect() as conn:
+            assert (
+                conn.execute(
+                    select(connected_account).where(connected_account.c.account_sub == sub)
+                ).first()
+                is None
+            )
 
 
 class TestPayoutStatus:
@@ -346,6 +408,36 @@ class TestConnectWebhook:
         assert row.source == "connect_webhook"
         assert row.type == "v1.account.updated"
         assert row.applied_at is not None
+
+    def test_an_account_not_ready_yet_is_read_again_after_the_event(self, api, engine, stripe_api):
+        """Stripe's account read can lag its capability events (dev sandbox, 2026-11-10)."""
+        account_id = new_account_id()
+        store_account(engine, uuid.uuid4(), account_id)
+        fetch = stripe_api.get(f"/v2/core/accounts/{account_id}").mock(
+            side_effect=[
+                httpx.Response(200, json=account_json(account_id, "restricted", "restricted")),
+                httpx.Response(200, json=account_json(account_id, "active", "active")),
+            ]
+        )
+        payload = json.dumps(thin_event(account_id, "v1.capability.updated")).encode()
+
+        response = api.post("/webhooks/stripe-connect", content=payload, headers=signed(payload))
+
+        assert response.status_code == 200
+        assert fetch.call_count == 2, "a second read follows when the first is not ready"
+        assert statuses(engine, account_id) == ("active", "active")
+
+    def test_a_ready_account_is_not_read_again(self, api, engine, stripe_api):
+        account_id = new_account_id()
+        store_account(engine, uuid.uuid4(), account_id)
+        fetch = stripe_api.get(f"/v2/core/accounts/{account_id}").mock(
+            return_value=httpx.Response(200, json=account_json(account_id, "active", "active"))
+        )
+        payload = json.dumps(thin_event(account_id)).encode()
+
+        api.post("/webhooks/stripe-connect", content=payload, headers=signed(payload))
+
+        assert fetch.call_count == 1
 
     def test_a_capability_event_is_applied_too(self, api, engine, stripe_api):
         account_id = new_account_id()
