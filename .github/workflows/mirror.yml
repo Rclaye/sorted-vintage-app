@@ -1,0 +1,52 @@
+# Mirror third-party images the cluster runs into ghcr.io/rclaye/ (T049, research R4).
+# Kyverno admits app images from ghcr.io/rclaye/ only (T026), so the Stripe CLI forwarder runs a
+# copy of a pinned upstream digest, scanned first. Nothing is pushed by hand: to move to a new
+# release, change the tag and digest below in a pull request; the merge runs this workflow, and
+# the gitops manifests then pin the mirrored digest it prints.
+name: mirror
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/mirror.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stripe-cli:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    env:
+      # Multi-arch index of stripe/stripe-cli v1.55.2 (Docker Hub, published 2026-10-26).
+      SOURCE: docker.io/stripe/stripe-cli@sha256:6fe7ec012be11a59e7749600c452dc7b9a5a3364d3983d50b1830d63ad15b535
+      TARGET: ghcr.io/rclaye/stripe-cli
+      VERSION: v1.55.2
+    steps:
+      - name: Trivy (fail on critical)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.SOURCE }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Copy the pinned digest
+        run: docker buildx imagetools create --tag "$TARGET:$VERSION" "$SOURCE"
+
+      - name: Print the digest for the gitops manifests
+        run: |
+          digest="$(docker buildx imagetools inspect "$TARGET:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "Pin this in gitops services/stripe-forwarder: $TARGET@$digest" | tee -a "$GITHUB_STEP_SUMMARY"
