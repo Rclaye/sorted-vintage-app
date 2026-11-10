@@ -28,6 +28,7 @@ def caller_sub(request: Request) -> uuid.UUID:
 @router.post("/connected-accounts/me/onboarding-link")
 def onboarding_link(request: Request) -> dict:
     sub = caller_sub(request)
+    email = str(request.state.claims.get("email") or "").strip()
     engine, connect, settings = (
         request.app.state.engine,
         request.app.state.connect,
@@ -36,7 +37,10 @@ def onboarding_link(request: Request) -> dict:
     try:
         row = accounts.find(engine, sub)
         if row is None:
-            account_id, caps = connect.create_account(str(sub))
+            if not email:
+                # Keycloak puts the account's email in the BFF's tokens (realm default scopes).
+                raise ApiError(422, "email_required", "The token carries no email address.")
+            account_id, caps = connect.create_account(str(sub), email)
             account_id = accounts.insert_if_missing(engine, sub, account_id, caps)
             log.info("connected account created", extra={"stripe_account": account_id})
         else:
