@@ -14,6 +14,9 @@ import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /** Every error leaves in the contract's shape (contracts/README.md). */
@@ -39,6 +42,23 @@ public class ApiErrorHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     ResponseEntity<Map<String, String>> unreadable(HttpMessageNotReadableException e) {
         return body(HttpStatus.UNPROCESSABLE_CONTENT, "validation_failed", "The request body is not valid JSON for a listing.");
+    }
+
+    /** Over spring.servlet.multipart limits (10 MB a file): rejected before anything is stored. */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<Map<String, String>> tooLarge(MaxUploadSizeExceededException e) {
+        return body(HttpStatus.CONTENT_TOO_LARGE, "photo_too_large", "Photos can be at most 10 MB.");
+    }
+
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    ResponseEntity<Map<String, String>> missingPart(MissingServletRequestPartException e) {
+        return body(HttpStatus.UNPROCESSABLE_CONTENT, "validation_failed",
+                "The upload needs a part named " + e.getRequestPartName() + ".");
+    }
+
+    @ExceptionHandler(MultipartException.class)
+    ResponseEntity<Map<String, String>> multipart(MultipartException e) {
+        return body(HttpStatus.BAD_REQUEST, "upload_failed", "The upload could not be read.");
     }
 
     @ExceptionHandler(MissingRequestHeaderException.class)
