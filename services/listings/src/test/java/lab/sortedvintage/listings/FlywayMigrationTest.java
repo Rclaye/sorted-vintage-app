@@ -18,7 +18,9 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @SpringBootTest(properties = {
         "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://127.0.0.1:1/certs",
         "spring.security.oauth2.resourceserver.jwt.issuer-uri=" + TestTokens.ISSUER,
-        "spring.security.oauth2.resourceserver.jwt.audiences=listings"
+        "spring.security.oauth2.resourceserver.jwt.audiences=listings",
+        "listings.s3.access-key-id=not-used",
+        "listings.s3.secret-access-key=not-used"
 })
 @Testcontainers(disabledWithoutDocker = true)
 class FlywayMigrationTest {

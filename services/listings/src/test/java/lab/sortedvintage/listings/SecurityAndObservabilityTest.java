@@ -14,9 +14,12 @@ import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfig
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpHeaders;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * No database here: the datasource, JPA and Flyway are switched off so the security and
@@ -34,7 +37,9 @@ import org.springframework.test.web.servlet.MockMvc;
                 + "org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration,"
                 + "org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration",
         "spring.security.oauth2.resourceserver.jwt.issuer-uri=" + TestTokens.ISSUER,
-        "spring.security.oauth2.resourceserver.jwt.audiences=listings"
+        "spring.security.oauth2.resourceserver.jwt.audiences=listings",
+        "listings.s3.access-key-id=not-used",
+        "listings.s3.secret-access-key=not-used"
 })
 @AutoConfigureMockMvc
 @AutoConfigureMetrics
@@ -46,6 +51,13 @@ class SecurityAndObservabilityTest {
     static void jwks(DynamicPropertyRegistry registry) {
         registry.add("spring.security.oauth2.resourceserver.jwt.jwk-set-uri", TOKENS::jwksUri);
     }
+
+    /** The repositories and the photo service need these; no route here reaches the database. */
+    @MockitoBean
+    JdbcClient jdbcClient;
+
+    @MockitoBean
+    TransactionTemplate transactionTemplate;
 
     @Autowired
     MockMvc mvc;

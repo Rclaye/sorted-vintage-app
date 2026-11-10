@@ -12,9 +12,25 @@ spring:
       max-file-size: 10MB
       max-request-size: 11MB
 
+# Photos in Garage (research R19). The gitops Deployment sets the S3_* variables; the keys have no
+# default, so a pod without them fails at startup rather than on the first upload.
+listings:
+  s3:
+    endpoint: ${S3_ENDPOINT:http://garage:3900}
+    region: ${S3_REGION:us-east-1}
+    bucket: ${S3_BUCKET:photos}
+    access-key-id: ${S3_ACCESS_KEY_ID}
+    secret-access-key: ${S3_SECRET_ACCESS_KEY}
+  payments:
+    url: ${PAYMENTS_URL:http://payments}
+
 server:
   port: 8080
   shutdown: graceful
+  tomcat:
+    # Read the rest of an oversized upload before answering 413, so the client gets the answer
+    # instead of a reset connection (Tomcat stops reading after 2 MB by default).
+    max-swallow-size: 12MB
 
 logging:
   structured:
