@@ -47,15 +47,29 @@ public final class TestTokens {
     }
 
     public String token(String issuer, List<String> audience, Instant expires) {
+        return token(issuer, audience, expires, UUID.randomUUID(), null);
+    }
+
+    /** A seller's token as Keycloak issues it: subject = account_sub, plus the display_name claim. */
+    public String seller(UUID accountSub, String displayName) {
+        return token(ISSUER, List.of("listings", "orders", "payments"), Instant.now().plusSeconds(300),
+                accountSub, displayName);
+    }
+
+    private String token(String issuer, List<String> audience, Instant expires, UUID subject, String displayName) {
         try {
-            JWTClaimsSet claims = new JWTClaimsSet.Builder()
+            JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder()
                     .issuer(issuer)
-                    .subject(UUID.randomUUID().toString())
+                    .subject(subject.toString())
                     .audience(audience)
                     .issueTime(Date.from(Instant.now().minusSeconds(60)))
                     .expirationTime(Date.from(expires))
                     .claim("typ", "Bearer")
-                    .build();
+                    .claim("azp", "bff");
+            if (displayName != null) {
+                builder.claim("display_name", displayName);
+            }
+            JWTClaimsSet claims = builder.build();
             SignedJWT jwt = new SignedJWT(
                     new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(key.getKeyID()).build(), claims);
             jwt.sign(new RSASSASigner(key));
