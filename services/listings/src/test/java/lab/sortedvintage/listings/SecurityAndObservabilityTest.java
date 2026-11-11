@@ -39,7 +39,9 @@ import org.springframework.transaction.support.TransactionTemplate;
         "spring.security.oauth2.resourceserver.jwt.issuer-uri=" + TestTokens.ISSUER,
         "spring.security.oauth2.resourceserver.jwt.audiences=listings",
         "listings.s3.access-key-id=not-used",
-        "listings.s3.secret-access-key=not-used"
+        "listings.s3.secret-access-key=not-used",
+        "listings.keycloak.token-url=http://127.0.0.1:1/token",
+        "listings.keycloak.client-secret=not-used"
 })
 @AutoConfigureMockMvc
 @AutoConfigureMetrics

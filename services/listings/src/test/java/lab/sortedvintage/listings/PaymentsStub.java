@@ -37,9 +37,12 @@ final class PaymentsStub {
                     body = "{\"error\":\"not_found\",\"message\":\"No such route.\"}".getBytes(StandardCharsets.UTF_8);
                 } else {
                     UUID sub = UUID.fromString(path.substring(PREFIX.length(), path.length() - SUFFIX.length()));
-                    code = 200;
-                    body = ("{\"payout_status\":\"" + statuses.getOrDefault(sub, "ready") + "\"}")
-                            .getBytes(StandardCharsets.UTF_8);
+                    String status = statuses.getOrDefault(sub, "ready");
+                    // "error" stands for Payments failing: 500, as when it cannot reach its database.
+                    code = "error".equals(status) ? 500 : 200;
+                    body = ("error".equals(status)
+                            ? "{\"error\":\"internal_error\",\"message\":\"down\"}"
+                            : "{\"payout_status\":\"" + status + "\"}").getBytes(StandardCharsets.UTF_8);
                 }
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
                 exchange.sendResponseHeaders(code, body.length);

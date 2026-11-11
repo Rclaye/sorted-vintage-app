@@ -31,6 +31,8 @@ public class SecurityConfig {
                         .requestMatchers("/error").permitAll()
                         // Public reads (FR-007, FR-008). Writes and reservations need a token.
                         .requestMatchers(HttpMethod.GET, "/listings", "/listings/*", "/sellers/*").permitAll()
+                        // Photo bytes: public for published listings, owner-only for drafts (checked there).
+                        .requestMatchers(HttpMethod.GET, "/photos/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(o -> o
                         .jwt(Customizer.withDefaults())

@@ -23,6 +23,12 @@ listings:
     secret-access-key: ${S3_SECRET_ACCESS_KEY}
   payments:
     url: ${PAYMENTS_URL:http://payments}
+  # Listings' own client-credentials token for Payments (T046): client listings in the realm,
+  # secret from the Secret keycloak-clients (key listings). No default for the URL or secret.
+  keycloak:
+    token-url: ${KEYCLOAK_TOKEN_URL}
+    client-id: ${KEYCLOAK_CLIENT_ID:listings}
+    client-secret: ${KEYCLOAK_CLIENT_SECRET}
 
 server:
   port: 8080

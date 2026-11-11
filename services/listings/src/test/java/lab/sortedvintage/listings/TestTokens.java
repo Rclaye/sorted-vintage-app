@@ -24,6 +24,7 @@ public final class TestTokens {
 
     private final RSAKey key;
     private final HttpServer jwks;
+    private final java.util.concurrent.atomic.AtomicInteger tokenRequests = new java.util.concurrent.atomic.AtomicInteger();
 
     public TestTokens() {
         try {
@@ -36,10 +37,34 @@ public final class TestTokens {
                 exchange.getResponseBody().write(body);
                 exchange.close();
             });
+            // Keycloak's token endpoint for Listings' client-credentials token (T046).
+            jwks.createContext("/token", exchange -> {
+                tokenRequests.incrementAndGet();
+                String form = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String auth = exchange.getRequestHeaders().getFirst("Authorization");
+                boolean ok = form.contains("grant_type=client_credentials") && auth != null && auth.startsWith("Basic ");
+                byte[] reply = (ok
+                        ? "{\"access_token\":\"" + token(ISSUER, List.of("payments"), Instant.now().plusSeconds(300),
+                                UUID.randomUUID(), null) + "\",\"expires_in\":300,\"token_type\":\"Bearer\"}"
+                        : "{\"error\":\"invalid_client\"}").getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(ok ? 200 : 401, reply.length);
+                exchange.getResponseBody().write(reply);
+                exchange.close();
+            });
             jwks.start();
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** Client-credentials requests answered so far; Listings should cache its token. */
+    public int tokenRequests() {
+        return tokenRequests.get();
+    }
+
+    public String tokenUri() {
+        return "http://127.0.0.1:" + jwks.getAddress().getPort() + "/token";
     }
 
     public String jwksUri() {
