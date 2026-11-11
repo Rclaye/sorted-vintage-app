@@ -716,6 +716,22 @@ class ListingsContractTest {
         }
 
         @Test
+        void theSellerAlsoSeesTheirDraftsAndNobodyElseDoes() {
+            Seller seller = newSeller("Jo");
+            JsonNode published = publishWithPhoto(seller, input(brand()));
+            JsonNode draft = createDraft(seller, input(brand()));
+
+            JsonNode own = send(HttpMethod.GET, "/sellers/" + seller.sub(), seller.token(), null).body();
+            JsonNode anonymous = send(HttpMethod.GET, "/sellers/" + seller.sub(), null, null).body();
+            JsonNode other = send(HttpMethod.GET, "/sellers/" + seller.sub(), newSeller("Alex").token(), null).body();
+
+            assertThat(idsOf(own.path("drafts"))).containsExactly(id(draft));
+            assertThat(idsOf(own.path("available"))).containsExactly(id(published));
+            assertThat(anonymous.has("drafts")).as("no drafts field for visitors").isFalse();
+            assertThat(other.has("drafts")).as("no drafts field for other sellers").isFalse();
+        }
+
+        @Test
         void unknownSellerIs404() {
             assertError(send(HttpMethod.GET, "/sellers/" + UUID.randomUUID(), null, null), 404, null);
         }
