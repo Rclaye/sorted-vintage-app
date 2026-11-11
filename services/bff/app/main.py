@@ -5,10 +5,11 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from opentelemetry.sdk.trace import TracerProvider
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
 
-from app import signin
+from app import pages, signin
 from app.auth import KeycloakKeys, KeyResolver
 from app.config import Settings
 from app.errors import error_response, install_error_handlers
@@ -16,6 +17,7 @@ from app.health import Check, checks_from_settings, failing
 from app.logging_json import configure_logging
 from app.metrics import MetricsMiddleware, make_histogram
 from app.oidc import Keycloak
+from app.services import ServiceDownError, Services
 from app.session import SessionCodec
 from app.telemetry import build_tracer_provider, instrument
 
@@ -29,6 +31,7 @@ def create_app(
     checks: dict[str, Check] | None = None,
     tracer_provider: TracerProvider | None = None,
     keycloak: Keycloak | None = None,
+    services: Services | None = None,
 ) -> FastAPI:
     """Tests pass fakes for keys, checks and tracer_provider; production reads the environment."""
     settings = settings or Settings.from_env()
@@ -54,7 +57,12 @@ def create_app(
         settings.client_secret,
         keys,
     )
+    app.state.services = services or Services(settings.listings_url, settings.payments_url)
     install_error_handlers(app)
+
+    @app.exception_handler(ServiceDownError)
+    async def _service_down(request: Request, exc: ServiceDownError):
+        return await pages.render(request, "unavailable.html", status=503, service=exc.service)
 
     @app.exception_handler(signin.SignInRequiredError)
     async def _sign_in_first(_: Request, exc: signin.SignInRequiredError):
@@ -67,6 +75,12 @@ def create_app(
         )
 
     app.include_router(signin.router)
+    app.include_router(pages.router)
+    app.mount(
+        "/static",
+        StaticFiles(directory=str(pages.Path(pages.__file__).parent / "static")),
+        name="static",
+    )
 
     registry = CollectorRegistry()
     histogram = make_histogram(registry)
@@ -90,6 +104,17 @@ def create_app(
     async def keep_session_cookie(request: Request, call_next):
         """Writes a refreshed session back, or clears one that can no longer be refreshed."""
         response = await call_next(request)
+        # Pages load only this site's own script, style and images (htmx is served from here).
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; "
+            # Publish redirects through /sell/onboarding to Stripe's hosted onboarding, and Chrome
+            # applies form-action to every hop of a redirect that starts from a form.
+            "form-action 'self' https://connect.stripe.com; "
+            "frame-ancestors 'none'; base-uri 'none'",
+        )
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
         if getattr(request.state, "session_cleared", False):
             signin.clear_session_cookie(request, response)
         elif getattr(request.state, "session_renewed", None) is not None:

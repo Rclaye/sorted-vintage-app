@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ listing.title }} · Sorted Vintage{% endblock %}
+{% block content %}
+{% if published %}<p class="notice ok" role="status">Published. It's now in browse and search.</p>{% endif %}
+<article class="item">
+  <div class="photos">
+    {% for p in listing.photos %}<img src="{{ p.url }}" alt="{{ listing.title }}, photo {{ loop.index }}">{% endfor %}
+    {% if not listing.photos %}<div class="nophoto big" aria-hidden="true"></div>{% endif %}
+  </div>
+  <div class="details">
+    <h1>{{ listing.title }}</h1>
+    <p class="price">${{ '%.2f' | format(listing.price_cents / 100) }}</p>
+    <p>{{ listing.brand }} · size {{ listing.size }} · {{ conditions.get(listing.condition, listing.condition) }} · {{ listing.category }}</p>
+    {% if listing.description %}<p class="description">{{ listing.description }}</p>{% endif %}
+    <p>Sold by <a href="/sellers/{{ listing.seller_sub }}">{{ listing.seller_display_name }}</a></p>
+    {% if listing.status == 'available' and not own %}
+      <button type="button" disabled title="Checkout arrives in Sprint 3">Buy (coming soon)</button>
+    {% elif listing.status != 'available' %}
+      <p class="badge">{{ listing.status }}</p>
+    {% endif %}
+    {% if own and listing.status == 'draft' %}
+      <section class="owner">
+        <h2>Your draft</h2>
+        <form method="post" action="/sell/listings/{{ listing.id }}/photos" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+          <label>Add a photo (JPEG, PNG or WebP, up to 10 MB, 8 per listing)
+            <input type="file" name="file" accept="image/jpeg,image/png,image/webp" required></label>
+          <button type="submit">Upload</button>
+        </form>
+        <form method="post" action="/sell/listings/{{ listing.id }}/publish">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+          <button type="submit" class="primary">Publish</button>
+        </form>
+      </section>
+    {% endif %}
+  </div>
+</article>
+{% endblock %}

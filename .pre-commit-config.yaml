@@ -9,7 +9,11 @@ repos:
       - id: check-yaml
         args: ["--allow-multiple-documents"]
       - id: end-of-file-fixer
+        # Vendored minified files stay byte-for-byte as published (checksums in VENDORED.md).
+        exclude: '\.min\.js$'
       - id: trailing-whitespace
+        # Vendored minified files stay byte-for-byte as published (checksums in VENDORED.md).
+        exclude: '\.min\.js$'
       - id: detect-private-key
       - id: detect-aws-credentials
         args: ["--allow-missing-credentials"]

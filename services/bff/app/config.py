@@ -35,6 +35,9 @@ class Settings:
     session_cookie_key: str = ""
     # Secure cookies need HTTPS; only local runs without TLS turn this off.
     cookie_secure: bool = True
+    # The services the pages call, in-cluster (T048).
+    listings_url: str = "http://listings"
+    payments_url: str = "http://payments"
 
     @property
     def realm_public_url(self) -> str:
@@ -87,4 +90,6 @@ class Settings:
             public_base_url=env.get("PUBLIC_BASE_URL", "").rstrip("/"),
             session_cookie_key=env.get("SESSION_COOKIE_KEY", ""),
             cookie_secure=env.get("COOKIE_SECURE", "true").lower() != "false",
+            listings_url=env.get("LISTINGS_URL", defaults.listings_url).rstrip("/"),
+            payments_url=env.get("PAYMENTS_URL", defaults.payments_url).rstrip("/"),
         )
