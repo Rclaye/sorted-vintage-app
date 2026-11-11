@@ -1,5 +1,6 @@
 package lab.sortedvintage.listings.seller;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import java.util.Map;
@@ -7,6 +8,8 @@ import java.util.UUID;
 import lab.sortedvintage.listings.listing.ListingRepository;
 import lab.sortedvintage.listings.listing.ListingView;
 import lab.sortedvintage.listings.web.ApiException;
+import lab.sortedvintage.listings.web.Caller;
+import org.springframework.security.core.Authentication;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,7 +19,8 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * T041, GET /sellers/{account_sub}: the public profile with its available listings (newest
  * published first) and sold ones (most recently sold first), FR-008. Each list holds at most 60,
- * the browse page maximum; drafts and deleted listings are never shown.
+ * the browse page maximum. Deleted listings are never shown; drafts only to the seller themself,
+ * in a drafts list that is absent for everyone else (Ticket 2.6, for the BFF's /sell page).
  */
 @RestController
 public class SellerController {
@@ -36,12 +40,13 @@ public class SellerController {
             @JsonProperty("display_name") String displayName,
             @JsonProperty("sold_count") int soldCount,
             List<ListingView> available,
-            List<ListingView> sold) {
+            List<ListingView> sold,
+            @JsonInclude(JsonInclude.Include.NON_NULL) List<ListingView> drafts) {
     }
 
     @GetMapping("/sellers/{sub}")
     @Transactional(readOnly = true)
-    SellerView profile(@PathVariable UUID sub) {
+    SellerView profile(@PathVariable UUID sub, Authentication auth) {
         record Profile(String displayName, int soldCount) {
         }
         Profile profile = jdbc.sql("select display_name, sold_count from seller_profile where account_sub = :sub")
@@ -55,6 +60,12 @@ public class SellerController {
         List<ListingView> sold = listings.query(ListingRepository.SELECT
                 + " where l.seller_sub = :sub and l.status = 'sold'"
                 + " order by l.updated_at desc, l.id desc limit :max", Map.of("sub", sub, "max", MAX_EACH));
-        return new SellerView(sub, profile.displayName(), profile.soldCount(), available, sold);
+        Caller caller = Caller.of(auth);
+        List<ListingView> drafts = caller != null && caller.sub().equals(sub)
+                ? listings.query(ListingRepository.SELECT
+                        + " where l.seller_sub = :sub and l.status = 'draft'"
+                        + " order by l.updated_at desc, l.id desc limit :max", Map.of("sub", sub, "max", MAX_EACH))
+                : null;
+        return new SellerView(sub, profile.displayName(), profile.soldCount(), available, sold, drafts);
     }
 }
