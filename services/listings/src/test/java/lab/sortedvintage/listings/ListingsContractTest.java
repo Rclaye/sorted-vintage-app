@@ -20,7 +20,6 @@ import java.util.function.Consumer;
 import javax.imageio.ImageIO;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import lab.sortedvintage.listings.photo.PendingPhotoCleanup;
@@ -67,9 +66,8 @@ import tools.jackson.databind.node.MissingNode;
  * Each test uses its own sellers and a brand of its own, so tests share one database without
  * seeing each other's listings.
  *
- * Until T046 (Ticket 2.6) adds the publish route, publishWithPhoto publishes through SQL and the
- * Publish tests are disabled. When T046 lands, switch publishWithPhoto back to the route and
- * remove the @Disabled.
+ * Publishing goes through the real route (T046), which asks the Payments stub with a
+ * client-credentials token from TestTokens' Keycloak stand-in.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "spring.security.oauth2.resourceserver.jwt.issuer-uri=" + TestTokens.ISSUER,
@@ -101,6 +99,8 @@ class ListingsContractTest {
         registry.add("listings.s3.access-key-id", GARAGE::accessKeyId);
         registry.add("listings.s3.secret-access-key", GARAGE::secretAccessKey);
         registry.add("listings.payments.url", PAYMENTS::url);
+        registry.add("listings.keycloak.token-url", TOKENS::tokenUri);
+        registry.add("listings.keycloak.client-secret", () -> "listings-test-secret");
     }
 
     @BeforeAll
@@ -516,8 +516,37 @@ class ListingsContractTest {
     // ---------------------------------------------------------------- POST /listings/{id}/publish
 
     @Nested
-    @Disabled("POST /listings/{id}/publish is T046 (Ticket 2.6); until then publishWithPhoto publishes through SQL")
     class Publish {
+
+        @Test
+        void publishingTwiceIs409NotADraft() {
+            Seller seller = newSeller("Sam");
+            JsonNode listing = publishWithPhoto(seller, input(brand()));
+
+            assertError(send(HttpMethod.POST, "/listings/" + id(listing) + "/publish", seller.token(), null),
+                    409, "not_a_draft");
+        }
+
+        @Test
+        void paymentsUnavailableIs503AndTheListingStaysADraft() {
+            Seller seller = newSeller("Sam");
+            PAYMENTS.payoutStatus(seller.sub(), "error");
+            JsonNode draft = createDraft(seller, input(brand()));
+            upload(draft, seller.token(), jpeg(), "a.jpg", MediaType.IMAGE_JPEG_VALUE, null);
+
+            assertError(send(HttpMethod.POST, "/listings/" + id(draft) + "/publish", seller.token(), null),
+                    503, "payout_status_unavailable");
+            assertThat(get(draft, seller.token()).path("status").asString()).isEqualTo("draft");
+        }
+
+        @Test
+        void listingsCachesItsServiceToken() {
+            int before = TOKENS.tokenRequests();
+            for (int i = 0; i < 3; i++) {
+                publishWithPhoto(newSeller("Sam"), input(brand()));
+            }
+            assertThat(TOKENS.tokenRequests() - before).as("one token covers several publishes").isLessThanOrEqualTo(1);
+        }
 
         @Test
         void aDraftWithAPhotoAndPayoutsReadyBecomesAvailable() {
@@ -692,6 +721,58 @@ class ListingsContractTest {
         }
     }
 
+    // ---------------------------------------------------------------- GET /photos/listings/{id}/{photo}
+
+    @Nested
+    class PhotoFiles {
+
+        @Test
+        void aPublishedListingsPhotoIsPublicAndCacheable() {
+            Seller seller = newSeller("Sam");
+            byte[] png = png();
+            JsonNode draft = createDraft(seller, input(brand()));
+            String url = upload(draft, seller.token(), png, "p.png", MediaType.IMAGE_PNG_VALUE, null)
+                    .body().path("url").asString();
+            assertThat(send(HttpMethod.POST, "/listings/" + id(draft) + "/publish", seller.token(), null).status())
+                    .isEqualTo(200);
+
+            ResponseEntity<byte[]> photo = bytes(url, null);
+
+            assertThat(photo.getStatusCode().value()).isEqualTo(200);
+            assertThat(photo.getHeaders().getContentType()).hasToString("image/png");
+            assertThat(photo.getHeaders().getCacheControl()).contains("public").contains("immutable");
+            assertThat(photo.getBody()).isEqualTo(png);
+        }
+
+        @Test
+        void aDraftsPhotoIsForItsSellerOnly() {
+            Seller seller = newSeller("Sam");
+            JsonNode draft = createDraft(seller, input(brand()));
+            String url = upload(draft, seller.token(), jpeg(), "a.jpg", MediaType.IMAGE_JPEG_VALUE, null)
+                    .body().path("url").asString();
+
+            assertThat(bytes(url, null).getStatusCode().value()).isEqualTo(404);
+            assertThat(bytes(url, newSeller("Alex").token()).getStatusCode().value()).isEqualTo(404);
+            ResponseEntity<byte[]> own = bytes(url, seller.token());
+            assertThat(own.getStatusCode().value()).isEqualTo(200);
+            assertThat(own.getHeaders().getCacheControl()).contains("no-store");
+        }
+
+        @Test
+        void anUnknownPhotoIs404() {
+            assertThat(bytes("/photos/listings/" + UUID.randomUUID() + "/" + UUID.randomUUID(), null)
+                    .getStatusCode().value()).isEqualTo(404);
+        }
+
+        private ResponseEntity<byte[]> bytes(String path, String token) {
+            return RestClient.builder().baseUrl("http://localhost:" + port)
+                    .defaultStatusHandler(status -> true, (request, response) -> { })
+                    .build().get().uri(path)
+                    .headers(h -> { if (token != null) { h.setBearerAuth(token); } })
+                    .retrieve().toEntity(byte[].class);
+        }
+    }
+
     // ---------------------------------------------------------------- T039, not a route
 
     @Nested
@@ -766,13 +847,9 @@ class ListingsContractTest {
         JsonNode draft = createDraft(seller, input);
         Resp photo = upload(draft, seller.token(), jpeg(), "front.jpg", MediaType.IMAGE_JPEG_VALUE, null);
         assertThat(photo.status()).as("upload: %s", photo.raw()).isEqualTo(201);
-        // Until T046: what the publish route will do, done in SQL.
-        jdbc.update("""
-                update listing set status = 'available', published_at = now(), version = version + 1,
-                       updated_at = now()
-                where id = ?::uuid and status = 'draft'
-                """, id(draft));
-        return get(draft, seller.token());
+        Resp published = send(HttpMethod.POST, "/listings/" + id(draft) + "/publish", seller.token(), null);
+        assertThat(published.status()).as("publish: %s", published.raw()).isEqualTo(200);
+        return published.body();
     }
 
     JsonNode get(JsonNode listing, String token) {

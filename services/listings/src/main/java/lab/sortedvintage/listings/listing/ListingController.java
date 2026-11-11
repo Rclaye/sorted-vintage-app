@@ -21,9 +21,17 @@ import org.springframework.web.bind.annotation.RestController;
 public class ListingController {
 
     private final ListingService service;
+    private final PublishService publishing;
 
-    public ListingController(ListingService service) {
+    public ListingController(ListingService service, PublishService publishing) {
         this.service = service;
+        this.publishing = publishing;
+    }
+
+    /** T046: 409 photos_required or payout_onboarding_required (the BFF sends the seller to onboarding). */
+    @PostMapping("/listings/{id}/publish")
+    ResponseEntity<ListingView> publish(@PathVariable UUID id, Authentication auth) {
+        return withVersion(ResponseEntity.ok(), publishing.publish(id, Caller.required(auth)));
     }
 
     @PostMapping("/listings")
