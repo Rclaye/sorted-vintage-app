@@ -7,3 +7,6 @@ opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-httpx
+# Pages and forms (Ticket 2.6, approved 2026-11-11)
+jinja2
+python-multipart

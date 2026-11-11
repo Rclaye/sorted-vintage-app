@@ -22,6 +22,9 @@ from app.main import create_app
 AUDIENCE = Settings().jwt_audience
 AZP = Settings().jwt_azp
 ISSUER = "http://keycloak.test/realms/sv-test"
+# Keycloak as the pods reach it, and the BFF as the browser does (HTTPS, so Secure cookies flow).
+INTERNAL_REALM = "http://keycloak.internal/realms/sv-test"
+PUBLIC_BASE = "https://testserver"
 
 
 class StaticKeys:
@@ -63,7 +66,15 @@ def make_token(private_key) -> Callable[..., str]:
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(env="test", jwt_issuer=ISSUER, log_level="INFO")
+    return Settings(
+        env="test",
+        jwt_issuer=ISSUER,
+        jwks_url=INTERNAL_REALM + "/protocol/openid-connect/certs",
+        log_level="INFO",
+        client_secret="bff-test-secret",
+        public_base_url=PUBLIC_BASE,
+        session_cookie_key="a-test-cookie-key-that-is-long-enough-123",
+    )
 
 
 @pytest.fixture
@@ -100,7 +111,7 @@ def client(settings, private_key, checks, spans) -> TestClient:
     async def boom() -> dict:
         raise RuntimeError("kaboom")
 
-    return TestClient(app, raise_server_exceptions=False)
+    return TestClient(app, base_url=PUBLIC_BASE, raise_server_exceptions=False)
 
 
 @pytest.fixture
