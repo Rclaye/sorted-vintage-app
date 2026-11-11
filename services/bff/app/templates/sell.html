@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% from "_card.html" import card %}
+{% block title %}Sell · Sorted Vintage{% endblock %}
+{% block content %}
+{% if payouts_ready %}<p class="notice ok" role="status">Payouts are set up. You can publish now.</p>{% endif %}
+<h1>Sell an item</h1>
+<p class="payouts">Payouts:
+  {% if payout_status == 'ready' %}<strong>ready</strong>
+  {% elif payout_status == 'unknown' %}can't be checked right now
+  {% else %}not set up yet. <a href="/sell/onboarding">Set up payouts with Stripe</a> (about 5 minutes; needed before publishing){% endif %}
+</p>
+<form method="post" action="/sell/listings" class="draft">
+  <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+  <label>Title <input name="title" required minlength="3" maxlength="80"></label>
+  <label>Brand <input name="brand" required maxlength="40"></label>
+  <label>Category
+    <select name="category" required>{% for c in categories %}<option value="{{ c }}">{{ c | capitalize }}</option>{% endfor %}</select></label>
+  <label>Size <input name="size" required maxlength="10"></label>
+  <label>Condition
+    <select name="condition" required>{% for k, v in conditions.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}</select></label>
+  <label>Price ($) <input name="price" required inputmode="decimal" pattern="[0-9]+(\.[0-9]{1,2})?"></label>
+  <label>Description <textarea name="description" maxlength="2000" rows="4"></textarea></label>
+  <button type="submit" class="primary">Save draft and add photos</button>
+</form>
+<h2>Your drafts</h2>
+{% if profile.drafts %}<div class="grid">{% for l in profile.drafts %}{{ card(l) }}{% endfor %}</div>{% else %}<p class="empty">No drafts.</p>{% endif %}
+<h2>For sale</h2>
+{% if profile.available %}<div class="grid">{% for l in profile.available %}{{ card(l) }}{% endfor %}</div>{% else %}<p class="empty">Nothing published yet.</p>{% endif %}
+{% if profile.sold %}<h2>Sold</h2><div class="grid">{% for l in profile.sold %}{{ card(l) }}{% endfor %}</div>{% endif %}
+{% endblock %}

@@ -2,15 +2,13 @@ import logging
 
 from opentelemetry.trace import SpanKind
 
-from tests.test_auth import bearer
-
 TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
 PARENT_SPAN = "b7ad6b7169203331"
 TRACEPARENT = f"00-{TRACE_ID}-{PARENT_SPAN}-01"
 
 
-def test_incoming_traceparent_is_continued(client, make_token, spans):
-    client.get("/ping", headers={**bearer(make_token()), "traceparent": TRACEPARENT})
+def test_incoming_traceparent_is_continued(client, spans):
+    client.get("/ping", headers={"traceparent": TRACEPARENT})
     servers = [s for s in spans.get_finished_spans() if s.kind == SpanKind.SERVER]
     assert servers, "expected a server span"
     server = servers[0]
@@ -18,8 +16,8 @@ def test_incoming_traceparent_is_continued(client, make_token, spans):
     assert format(server.parent.span_id, "016x") == PARENT_SPAN
 
 
-def test_json_log_carries_required_fields_and_trace_ids(client, make_token, log_lines):
-    client.get("/ping", headers={**bearer(make_token()), "traceparent": TRACEPARENT})
+def test_json_log_carries_required_fields_and_trace_ids(client, log_lines):
+    client.get("/ping", headers={"traceparent": TRACEPARENT})
     lines = log_lines()
     request_log = next(line for line in lines if line["message"] == "request")
     for field in ("timestamp", "level", "service", "env", "trace_id", "span_id", "message"):

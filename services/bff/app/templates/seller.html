@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% from "_card.html" import card %}
+{% block title %}{{ profile.display_name }} · Sorted Vintage{% endblock %}
+{% block content %}
+<h1>{{ profile.display_name }}</h1>
+<p>{{ profile.sold_count }} sold</p>
+<h2>For sale</h2>
+{% if profile.available %}<div class="grid">{% for l in profile.available %}{{ card(l) }}{% endfor %}</div>{% else %}<p class="empty">Nothing for sale right now.</p>{% endif %}
+{% if profile.sold %}<h2>Sold</h2><div class="grid">{% for l in profile.sold %}{{ card(l) }}{% endfor %}</div>{% endif %}
+{% endblock %}

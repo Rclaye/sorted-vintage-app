@@ -1,0 +1,8 @@
+{% from "_card.html" import card %}
+{% if bad_filter %}<p class="notice error">Those filters aren't valid.</p>{% endif %}
+{% if items %}
+  <div class="grid">{% for listing in items %}{{ card(listing) }}{% endfor %}</div>
+  {% if next_cursor %}<p class="more"><a href="/search?{{ next_query }}">More</a></p>{% endif %}
+{% else %}
+  <p class="empty">Nothing here yet.</p>
+{% endif %}

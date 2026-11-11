@@ -1,18 +1,24 @@
 """Application factory. Run with: uvicorn app.main:create_app --factory."""
 
 import logging
+from urllib.parse import quote
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from opentelemetry.sdk.trace import TracerProvider
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
 
-from app.auth import JWTAuthMiddleware, KeycloakKeys, KeyResolver
+from app import pages, signin
+from app.auth import KeycloakKeys, KeyResolver
 from app.config import Settings
 from app.errors import error_response, install_error_handlers
 from app.health import Check, checks_from_settings, failing
 from app.logging_json import configure_logging
 from app.metrics import MetricsMiddleware, make_histogram
+from app.oidc import Keycloak
+from app.services import ServiceDownError, Services
+from app.session import SessionCodec
 from app.telemetry import build_tracer_provider, instrument
 
 log = logging.getLogger(__name__)
@@ -24,6 +30,8 @@ def create_app(
     keys: KeyResolver | None = None,
     checks: dict[str, Check] | None = None,
     tracer_provider: TracerProvider | None = None,
+    keycloak: Keycloak | None = None,
+    services: Services | None = None,
 ) -> FastAPI:
     """Tests pass fakes for keys, checks and tracer_provider; production reads the environment."""
     settings = settings or Settings.from_env()
@@ -38,10 +46,41 @@ def create_app(
 
     app = FastAPI(
         title=settings.service_name,
-        description="Browser-facing backend: OIDC session and server-rendered pages (stub: /healthz and /metrics)",  # noqa: E501
+        description="Browser-facing backend: OIDC session and server-rendered pages",
     )
     app.state.settings = settings
+    app.state.codec = SessionCodec(settings.session_cookie_key)
+    app.state.keycloak = keycloak or Keycloak(
+        settings.realm_public_url,
+        settings.realm_internal_url,
+        settings.client_id,
+        settings.client_secret,
+        keys,
+    )
+    app.state.services = services or Services(settings.listings_url, settings.payments_url)
     install_error_handlers(app)
+
+    @app.exception_handler(ServiceDownError)
+    async def _service_down(request: Request, exc: ServiceDownError):
+        return await pages.render(request, "unavailable.html", status=503, service=exc.service)
+
+    @app.exception_handler(signin.SignInRequiredError)
+    async def _sign_in_first(_: Request, exc: signin.SignInRequiredError):
+        return RedirectResponse(f"/login?next={quote(exc.next_path, safe='/')}", status_code=303)
+
+    @app.exception_handler(signin.CsrfError)
+    async def _csrf(_: Request, __: signin.CsrfError):
+        return error_response(
+            403, "csrf_failed", "The form expired. Reload the page and try again."
+        )
+
+    app.include_router(signin.router)
+    app.include_router(pages.router)
+    app.mount(
+        "/static",
+        StaticFiles(directory=str(pages.Path(pages.__file__).parent / "static")),
+        name="static",
+    )
 
     registry = CollectorRegistry()
     histogram = make_histogram(registry)
@@ -59,17 +98,30 @@ def create_app(
     async def metrics() -> Response:
         return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
 
-    # Add your routes here. Each one needs a valid Keycloak token unless listed in PUBLIC_PATHS.
+    # Browsers carry a session cookie, not a bearer token (contracts/bff-pages.md), so the
+    # template's JWT middleware is not used here: pages call signin.require_session instead.
+    @app.middleware("http")
+    async def keep_session_cookie(request: Request, call_next):
+        """Writes a refreshed session back, or clears one that can no longer be refreshed."""
+        response = await call_next(request)
+        # Pages load only this site's own script, style and images (htmx is served from here).
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; "
+            # Publish redirects through /sell/onboarding to Stripe's hosted onboarding, and Chrome
+            # applies form-action to every hop of a redirect that starts from a form.
+            "form-action 'self' https://connect.stripe.com; "
+            "frame-ancestors 'none'; base-uri 'none'",
+        )
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        if getattr(request.state, "session_cleared", False):
+            signin.clear_session_cookie(request, response)
+        elif getattr(request.state, "session_renewed", None) is not None:
+            signin.set_session_cookie(request, response, request.state.session_renewed)
+        return response
 
-    # Last added is outermost: telemetry > metrics/logging > JWT > routes.
-    app.add_middleware(
-        JWTAuthMiddleware,
-        keys=keys,
-        audience=settings.jwt_audience,
-        authorized_party=settings.jwt_azp,
-        issuer=settings.jwt_issuer,
-        public_paths=settings.public_paths,
-    )
+    # Last added is outermost: telemetry > metrics/logging > session cookie > routes.
     app.add_middleware(MetricsMiddleware, histogram=histogram)
     instrument(app, tracer_provider or build_tracer_provider(settings))
     return app

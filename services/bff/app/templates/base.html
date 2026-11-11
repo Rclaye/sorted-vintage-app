@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Sorted Vintage{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx-2.0.11.min.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/">Sorted Vintage</a>
+    <nav>
+      <a href="/">Browse</a>
+      <a href="/sell">Sell</a>
+      {% if session %}
+        <span class="who">{{ session.name or session.email }}</span>
+        <form method="post" action="/logout" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+          <button type="submit" class="link">Sign out</button>
+        </form>
+      {% else %}
+        <a href="/login?next={{ request.url.path | urlencode }}">Sign in</a>
+        <a href="/signup" class="button">Sign up</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main>
+    {% if request.query_params.get('signin') == 'failed' %}
+      <p class="notice error" role="alert">Sign-in didn't complete. Please try again.</p>
+    {% endif %}
+    {% if message %}<p class="notice error" role="alert">{{ message }}</p>{% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

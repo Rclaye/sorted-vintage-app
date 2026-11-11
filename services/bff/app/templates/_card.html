@@ -1,0 +1,13 @@
+{% macro card(listing) -%}
+<a class="card" href="/items/{{ listing.id }}">
+  {% if listing.photos %}
+    <img src="{{ listing.photos[0].url }}" alt="{{ listing.title }}" loading="lazy">
+  {% else %}
+    <div class="nophoto" aria-hidden="true"></div>
+  {% endif %}
+  <span class="title">{{ listing.title }}</span>
+  <span class="meta">{{ listing.brand }} · {{ listing.size }}</span>
+  <span class="price">${{ '%.2f' | format(listing.price_cents / 100) }}</span>
+  {% if listing.status != 'available' %}<span class="badge">{{ listing.status }}</span>{% endif %}
+</a>
+{%- endmacro %}

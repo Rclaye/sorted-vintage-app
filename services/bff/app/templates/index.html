@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<form class="search" action="/search" method="get"
+      hx-get="/search" hx-target="#results" hx-push-url="true"
+      hx-trigger="submit, input changed delay:400ms, change">
+  <input type="search" name="q" value="{{ filters.q }}" placeholder="Search title, brand, description" aria-label="Search">
+  <input name="brand" value="{{ filters.brand }}" placeholder="Brand" aria-label="Brand">
+  <input name="size" value="{{ filters.size }}" placeholder="Size" aria-label="Size">
+  <select name="category" aria-label="Category">
+    <option value="">Any category</option>
+    {% for c in categories %}<option value="{{ c }}" {{ 'selected' if filters.category == c }}>{{ c | capitalize }}</option>{% endfor %}
+  </select>
+  <input name="min" value="{{ filters.min }}" inputmode="decimal" placeholder="Min $" aria-label="Minimum price">
+  <input name="max" value="{{ filters.max }}" inputmode="decimal" placeholder="Max $" aria-label="Maximum price">
+  <button type="submit">Search</button>
+</form>
+<div id="results">{% include "_results.html" %}</div>
+{% endblock %}
