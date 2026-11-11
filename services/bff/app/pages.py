@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote, urlencode
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -266,13 +267,18 @@ async def onboarding(request: Request, session: SignedIn) -> Response:
 # ---------------------------------------------------------------- photos (decided 2026-11-11)
 
 
-@router.get("/photos/{path:path}")
-async def photo(path: str, request: Request) -> Response:
-    """Forwards to Listings, which reads Garage; a draft's photos need the seller's token."""
-    if ".." in path or path.startswith("/"):
+@router.get("/photos/listings/{listing_id}/{photo_id}")
+async def photo(listing_id: str, photo_id: str, request: Request) -> Response:
+    """Forwards to Listings, which reads Garage; a draft's photos need the seller's token.
+    Only the shape Listings issues (two UUIDs) is accepted; anything else is 404."""
+    try:
+        listing, photo_uuid = UUID(listing_id), UUID(photo_id)
+    except ValueError:
         return Response(status_code=404)
     session = await current_session(request)
-    upstream = await services(request).photo(path, session.access_token if session else None)
+    upstream = await services(request).photo(
+        listing, photo_uuid, session.access_token if session else None
+    )
     if upstream.status_code != 200:
         return Response(status_code=404)
     headers = {"X-Content-Type-Options": "nosniff"}

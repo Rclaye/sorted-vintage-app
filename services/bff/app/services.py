@@ -6,6 +6,7 @@ decide what an answer means; network failures become ServiceDown, shown as a fri
 
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 import httpx
 
@@ -53,9 +54,12 @@ class Services:
             body = None
         return Answer(response.status_code, body)
 
-    async def photo(self, path: str, token: str | None) -> httpx.Response:
+    async def photo(self, listing_id: UUID, photo_id: UUID, token: str | None) -> httpx.Response:
+        """Photo bytes from Listings. Only parsed UUIDs go into the URL, so nothing the browser
+        sends can point the request anywhere else."""
         headers = {"Authorization": f"Bearer {token}"} if token else {}
+        url = f"{self.listings}/photos/listings/{listing_id}/{photo_id}"
         try:
-            return await self._http.get(f"{self.listings}/photos/{path}", headers=headers)
+            return await self._http.get(url, headers=headers)
         except httpx.HTTPError as exc:
             raise ServiceDownError("Listings") from exc

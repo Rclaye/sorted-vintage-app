@@ -270,8 +270,11 @@ def test_coming_back_ready_from_stripe_returns_to_the_listing(web, fake, make_to
 # ---------------------------------------------------------------- photos, failures, headers
 
 
+A, B = "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+
+
 def test_photos_are_forwarded_from_listings(web, fake):
-    fake.get(f"{LISTINGS}/photos/listings/a/b").mock(
+    fake.get(f"{LISTINGS}/photos/listings/{A}/{B}").mock(
         return_value=httpx.Response(
             200,
             content=b"\xff\xd8\xffjpeg",
@@ -281,14 +284,26 @@ def test_photos_are_forwarded_from_listings(web, fake):
             },
         )
     )
-    response = web.get("/photos/listings/a/b")
+    response = web.get(f"/photos/listings/{A}/{B}")
     assert response.status_code == 200 and response.content == b"\xff\xd8\xffjpeg"
     assert response.headers["content-type"] == "image/jpeg"
     assert "immutable" in response.headers["cache-control"]
 
 
-def test_a_photo_path_cannot_climb_out(web):
-    assert web.get("/photos/../secrets").status_code == 404
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/photos/../secrets",
+        "/photos/listings/a/b",
+        f"/photos/listings/{A}/..%2F..%2Fhealthz",
+        f"/photos/other/{A}/{B}",
+        f"/photos/listings/{A}/{B}/extra",
+    ],
+)
+def test_only_listing_and_photo_ids_reach_listings(web, fake, path):
+    upstream = fake.get(url__regex=r".*").mock(return_value=httpx.Response(200, content=b"x"))
+    assert web.get(path).status_code == 404
+    assert upstream.call_count == 0
 
 
 def test_a_service_that_is_down_shows_a_friendly_503(web, fake):
