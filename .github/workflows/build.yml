@@ -180,6 +180,10 @@ jobs:
           SOURCE: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
         run: |
           set -euo pipefail
+          if [ ! -f "services/$SERVICE/overlays/dev/kustomization.yaml" ]; then
+            echo "No dev overlay for $SERVICE in gitops yet: image pushed, nothing to deploy."
+            exit 0
+          fi
           scripts/set-image-tag.py set "$SERVICE" dev "$TAG" --first-replicas 1
           user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
           git config user.name "${APP_SLUG}[bot]"
