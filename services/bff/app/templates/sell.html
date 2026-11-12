@@ -3,6 +3,7 @@
 {% block title %}Sell · Sorted Vintage{% endblock %}
 {% block content %}
 {% if payouts_ready %}<p class="notice ok" role="status">Payouts are set up. You can publish now.</p>{% endif %}
+{% if deleted %}<p class="notice ok" role="status">Listing deleted.</p>{% endif %}
 <h1>Sell an item</h1>
 <p class="payouts">Payouts:
   {% if payout_status == 'ready' %}<strong>ready</strong>

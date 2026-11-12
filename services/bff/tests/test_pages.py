@@ -326,3 +326,51 @@ def test_the_vendored_htmx_is_the_reviewed_file(web):
         "d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717"
     )
     assert web.get("/static/htmx-2.0.11.min.js").status_code == 200
+
+
+# ---------------------------------------------------------------- deleting (T037, T115)
+
+
+def test_the_seller_sees_delete_on_their_available_listing(web, fake, make_token):
+    signed_in(web, fake, make_token)
+    mine = listing(seller_sub=SUB, status="available")
+    fake.get(f"{LISTINGS}/listings/{mine['id']}").mock(return_value=httpx.Response(200, json=mine))
+    assert "Delete listing" in web.get(f"/items/{mine['id']}").text
+
+
+def test_no_delete_on_someone_elses_or_a_sold_listing(web, fake, make_token):
+    signed_in(web, fake, make_token)
+    theirs = listing(status="available")
+    fake.get(f"{LISTINGS}/listings/{theirs['id']}").mock(
+        return_value=httpx.Response(200, json=theirs)
+    )
+    assert "Delete listing" not in web.get(f"/items/{theirs['id']}").text
+    sold = {**listing(seller_sub=SUB, status="sold"), "id": "00000000-0000-0000-0000-000000000099"}
+    fake.get(f"{LISTINGS}/listings/{sold['id']}").mock(return_value=httpx.Response(200, json=sold))
+    assert "Delete listing" not in web.get(f"/items/{sold['id']}").text
+
+
+def test_deleting_goes_back_to_selling(web, fake, make_token):
+    csrf = signed_in(web, fake, make_token)
+    lid = listing()["id"]
+    route = fake.delete(f"{LISTINGS}/listings/{lid}").mock(return_value=httpx.Response(204))
+    response = web.post(f"/sell/listings/{lid}/delete", data={"csrf_token": csrf})
+    assert response.headers["location"] == "/sell?deleted=1"
+    assert route.calls.last.request.headers["authorization"].startswith("Bearer ")
+
+
+def test_a_locked_listing_is_not_deleted(web, fake, make_token):
+    csrf = signed_in(web, fake, make_token)
+    lid = listing()["id"]
+    fake.delete(f"{LISTINGS}/listings/{lid}").mock(
+        return_value=httpx.Response(409, json={"error": "listing_locked", "message": "x"})
+    )
+    response = web.post(f"/sell/listings/{lid}/delete", data={"csrf_token": csrf})
+    assert response.headers["location"] == f"/items/{lid}?error=listing_locked"
+
+
+def test_deleting_needs_the_form_token(web, fake, make_token):
+    signed_in(web, fake, make_token)
+    route = fake.delete(f"{LISTINGS}/listings/{listing()['id']}")
+    response = web.post(f"/sell/listings/{listing()['id']}/delete", data={"csrf_token": "wrong"})
+    assert response.status_code in (302, 303, 403) and not route.called
