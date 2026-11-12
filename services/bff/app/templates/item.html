@@ -33,6 +33,12 @@
         </form>
       </section>
     {% endif %}
+    {% if own and listing.status in ('draft', 'available') %}
+      <form method="post" action="/sell/listings/{{ listing.id }}/delete" class="danger">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+        <button type="submit">Delete listing</button>
+      </form>
+    {% endif %}
   </div>
 </article>
 {% endblock %}

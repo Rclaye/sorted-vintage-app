@@ -178,6 +178,7 @@ async def sell(request: Request, session: SignedIn) -> HTMLResponse:
         profile=profile,
         payout_status=payout_status,
         payouts_ready=request.query_params.get("payouts") == "ready",
+        deleted=request.query_params.get("deleted") == "1",
     )
 
 
@@ -241,6 +242,22 @@ async def publish(listing_id: str, request: Request, session: SignedIn) -> Respo
     if answer.error == "payout_onboarding_required":
         return back("/sell/onboarding", next=target)
     return back(target, error=answer.error or "validation_failed")
+
+
+@router.post("/sell/listings/{listing_id}/delete")
+async def delete_listing(listing_id: str, request: Request, session: SignedIn) -> Response:
+    """The seller removes their own draft or available listing (T037 in Listings; needed by
+    verify_sprint2.sh, T115, to clean up its test listing). Reserved or sold: 409 listing_locked."""
+    await check_csrf(request, session)
+    svc = services(request)
+    answer = await svc.call(
+        "DELETE",
+        f"{svc.listings}/listings/{quote(listing_id, safe='')}",
+        token=session.access_token,
+    )
+    if answer.status == 204:
+        return back("/sell", deleted="1")
+    return back(f"/items/{quote(listing_id, safe='')}", error=answer.error or "delete_failed")
 
 
 @router.get("/sell/onboarding")
