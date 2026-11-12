@@ -1,9 +1,11 @@
 """T043: Stripe-hosted onboarding and payout status (FR-014, research R17)."""
 
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, Request
+from pydantic import BaseModel
 
 from app import accounts
 from app.errors import ApiError
@@ -71,3 +73,48 @@ def get_payout_status(account_sub: uuid.UUID, request: Request) -> dict:
             row.card_payments_status, row.stripe_transfers_status
         )
     }
+
+
+class AccountLink(BaseModel):
+    stripe_account_id: str
+
+
+_ACCOUNT_ID = re.compile(r"acct_[A-Za-z0-9]{8,64}")
+
+
+@router.put("/connected-accounts/{account_sub}")
+def link_account(account_sub: uuid.UUID, body: AccountLink, request: Request) -> dict:
+    """T051: attaches a seller to a Stripe account that already exists, for the dev seed job.
+
+    Stripe will not let the platform accept its terms for a seller (Ticket 2.1), so demo
+    sellers are onboarded once by hand and their accounts outlive a rebuild; this is how a
+    re-created seller gets theirs back. Off unless ACCOUNT_LINK_AZP names a client (sv-dev
+    only), and then only that client's own token may call it. The statuses stored are the ones
+    Stripe reports now, never the caller's word."""
+    settings = request.app.state.settings
+    if not settings.account_link_azp:
+        raise ApiError(404, "not_found", "Not found.")
+    if request.state.claims.get("azp") != settings.account_link_azp:
+        raise ApiError(403, "forbidden", "This client may not link accounts.")
+    account_id = body.stripe_account_id.strip()
+    if not _ACCOUNT_ID.fullmatch(account_id):
+        raise ApiError(422, "invalid_account_id", "stripe_account_id must look like acct_...")
+    engine, connect = request.app.state.engine, request.app.state.connect
+    try:
+        caps = connect.capabilities(account_id)
+    except ProviderUnavailableError as exc:
+        log.warning("Stripe unavailable for an account link", extra={"reason": str(exc)})
+        raise ApiError(503, "provider_unavailable", "Stripe cannot be reached. Try again.") from exc
+    except ProviderRejectedError as exc:
+        log.warning("Stripe does not know the account to link", extra={"reason": str(exc)})
+        raise ApiError(
+            422, "unknown_stripe_account", "Stripe has no such account in this sandbox."
+        ) from exc
+    if accounts.link(engine, account_sub, account_id, caps):
+        log.warning(
+            "connected account moved to another seller",
+            extra={"stripe_account": account_id, "sub": str(account_sub)},
+        )
+    else:
+        log.info("connected account linked", extra={"stripe_account": account_id})
+    return {"payout_status": accounts.payout_status(caps.card_payments, caps.stripe_transfers)}

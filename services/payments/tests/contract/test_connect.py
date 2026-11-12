@@ -59,26 +59,45 @@ def stripe_api():
         yield router
 
 
-@pytest.fixture
-def api(settings, private_key, engine, stripe_api):
-    """The real app on the test database, with migrations run by its lifespan."""
+def make_api(settings, private_key, engine, **overrides):
     import dataclasses
 
-    app = create_app(
+    return create_app(
         dataclasses.replace(
             settings,
             stripe_webhook_secret=WEBHOOK_SECRET,
             public_base_url=BASE_URL,
             reconcile_interval_seconds=0,
             event_recheck_seconds=0,
+            **overrides,
         ),
         keys=StaticKeys(private_key.public_key()),
         checks={},
         engine=engine,
         connect=StripeConnect(make_client("sk_test_contract")),
     )
-    with TestClient(app, raise_server_exceptions=False) as client:
-        yield client
+
+
+@pytest.fixture
+def api(settings, private_key, engine, stripe_api):
+    """The real app on the test database, with migrations run by its lifespan."""
+    with TestClient(make_api(settings, private_key, engine), raise_server_exceptions=False) as c:
+        yield c
+
+
+@pytest.fixture
+def dev_api(settings, private_key, engine, stripe_api):
+    """The app as sv-dev runs it: the seed client may link accounts (T051)."""
+    app = make_api(settings, private_key, engine, account_link_azp="seed")
+    with TestClient(app, raise_server_exceptions=False) as c:
+        yield c
+
+
+@pytest.fixture
+def seed_client(make_token):
+    """The seed job's client-credentials token: azp seed, payments in aud."""
+    token = make_token(sub=str(uuid.uuid4()), aud="payments", azp="seed")
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
@@ -384,6 +403,209 @@ class TestPayoutStatus:
     def test_not_a_uuid_is_422(self, api, seller):
         _, auth = seller
         assert api.get("/connected-accounts/nope/payout-status", headers=auth).status_code == 422
+
+
+# ---------------------------------------------------------------- PUT /connected-accounts/{sub}
+
+
+def owner_of(engine, account_id):
+    with engine.connect() as conn:
+        return conn.execute(
+            select(connected_account.c.account_sub).where(
+                connected_account.c.stripe_account_id == account_id
+            )
+        ).scalar_one_or_none()
+
+
+def fake_account_read(account_id: str, card: str = "active", transfers: str = "active"):
+    return httpx.Response(200, json=account_json(account_id, card, transfers))
+
+
+class TestLinkAccount:
+    def test_links_a_seller_to_an_account_stripe_knows(
+        self, dev_api, engine, stripe_api, seed_client
+    ):
+        sub, account_id = uuid.uuid4(), new_account_id()
+        fetch = stripe_api.get(f"/v2/core/accounts/{account_id}").mock(
+            return_value=fake_account_read(account_id)
+        )
+
+        response = dev_api.put(
+            f"/connected-accounts/{sub}",
+            json={"stripe_account_id": account_id},
+            headers=seed_client,
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {"payout_status": "ready"}
+        assert owner_of(engine, account_id) == sub
+        assert statuses(engine, account_id) == ("active", "active")
+        assert "include" in str(fetch.calls.last.request.url)
+
+    def test_stores_what_stripe_reports_not_ready_included(
+        self, dev_api, engine, stripe_api, seed_client
+    ):
+        sub, account_id = uuid.uuid4(), new_account_id()
+        stripe_api.get(f"/v2/core/accounts/{account_id}").mock(
+            return_value=fake_account_read(account_id, "active", "restricted")
+        )
+
+        response = dev_api.put(
+            f"/connected-accounts/{sub}",
+            json={"stripe_account_id": account_id},
+            headers=seed_client,
+        )
+
+        assert response.json() == {"payout_status": "pending"}
+        assert statuses(engine, account_id) == ("active", "restricted")
+
+    def test_the_same_call_again_changes_nothing(self, dev_api, engine, stripe_api, seed_client):
+        sub, account_id = uuid.uuid4(), new_account_id()
+        stripe_api.get(f"/v2/core/accounts/{account_id}").mock(
+            return_value=fake_account_read(account_id)
+        )
+        body = {"stripe_account_id": account_id}
+
+        first = dev_api.put(f"/connected-accounts/{sub}", json=body, headers=seed_client)
+        second = dev_api.put(f"/connected-accounts/{sub}", json=body, headers=seed_client)
+
+        assert first.json() == second.json() == {"payout_status": "ready"}
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(connected_account).where(connected_account.c.account_sub == sub)
+            ).all()
+        assert len(rows) == 1
+
+    def test_an_account_moves_from_its_old_seller(self, dev_api, engine, stripe_api, seed_client):
+        """After a rebuild the same person has a new Keycloak id; the account follows them."""
+        old, new, account_id = uuid.uuid4(), uuid.uuid4(), new_account_id()
+        store_account(engine, old, account_id, "active", "active")
+        stripe_api.get(f"/v2/core/accounts/{account_id}").mock(
+            return_value=fake_account_read(account_id)
+        )
+
+        response = dev_api.put(
+            f"/connected-accounts/{new}",
+            json={"stripe_account_id": account_id},
+            headers=seed_client,
+        )
+
+        assert response.status_code == 200, response.text
+        assert owner_of(engine, account_id) == new
+        with engine.connect() as conn:
+            assert (
+                conn.execute(
+                    select(connected_account).where(connected_account.c.account_sub == old)
+                ).first()
+                is None
+            )
+
+    def test_a_seller_with_another_account_gets_the_linked_one(
+        self, dev_api, engine, stripe_api, seed_client
+    ):
+        sub, before, after = uuid.uuid4(), new_account_id(), new_account_id()
+        store_account(engine, sub, before)
+        stripe_api.get(f"/v2/core/accounts/{after}").mock(return_value=fake_account_read(after))
+
+        response = dev_api.put(
+            f"/connected-accounts/{sub}", json={"stripe_account_id": after}, headers=seed_client
+        )
+
+        assert response.json() == {"payout_status": "ready"}
+        assert owner_of(engine, after) == sub
+        assert owner_of(engine, before) is None
+
+    def test_off_by_default_is_404_even_for_the_seed_client(
+        self, api, engine, stripe_api, seed_client
+    ):
+        account_id = new_account_id()
+        fetch = stripe_api.get(f"/v2/core/accounts/{account_id}").mock(
+            return_value=fake_account_read(account_id)
+        )
+
+        response = api.put(
+            f"/connected-accounts/{uuid.uuid4()}",
+            json={"stripe_account_id": account_id},
+            headers=seed_client,
+        )
+
+        assert_error(response, 404, "not_found")
+        assert fetch.call_count == 0
+        assert owner_of(engine, account_id) is None
+
+    def test_a_seller_or_another_service_is_403(
+        self, dev_api, engine, stripe_api, seller, listings_service
+    ):
+        sub, auth = seller
+        account_id = new_account_id()
+        fetch = stripe_api.get(f"/v2/core/accounts/{account_id}").mock(
+            return_value=fake_account_read(account_id)
+        )
+        body = {"stripe_account_id": account_id}
+
+        for headers in (auth, listings_service):
+            assert_error(
+                dev_api.put(f"/connected-accounts/{sub}", json=body, headers=headers),
+                403,
+                "forbidden",
+            )
+        assert fetch.call_count == 0
+        assert owner_of(engine, account_id) is None
+
+    def test_needs_a_token(self, dev_api):
+        response = dev_api.put(
+            f"/connected-accounts/{uuid.uuid4()}", json={"stripe_account_id": new_account_id()}
+        )
+        assert_error(response, 401, "missing_token")
+
+    def test_an_account_stripe_does_not_know_is_422_and_stores_nothing(
+        self, dev_api, engine, stripe_api, seed_client
+    ):
+        sub, account_id = uuid.uuid4(), new_account_id()
+        stripe_api.get(f"/v2/core/accounts/{account_id}").mock(
+            return_value=httpx.Response(
+                404, json={"error": {"type": "invalid_request_error", "message": "No such account"}}
+            )
+        )
+
+        response = dev_api.put(
+            f"/connected-accounts/{sub}",
+            json={"stripe_account_id": account_id},
+            headers=seed_client,
+        )
+
+        assert_error(response, 422, "unknown_stripe_account")
+        assert owner_of(engine, account_id) is None
+
+    def test_stripe_unreachable_is_503_and_keeps_the_old_link(
+        self, dev_api, engine, stripe_api, seed_client
+    ):
+        old, account_id = uuid.uuid4(), new_account_id()
+        store_account(engine, old, account_id)
+        stripe_api.get(f"/v2/core/accounts/{account_id}").mock(
+            side_effect=httpx.ConnectError("down")
+        )
+
+        response = dev_api.put(
+            f"/connected-accounts/{uuid.uuid4()}",
+            json={"stripe_account_id": account_id},
+            headers=seed_client,
+        )
+
+        assert_error(response, 503, "provider_unavailable")
+        assert owner_of(engine, account_id) == old
+
+    @pytest.mark.parametrize("bad", ["", "cus_123456789", "acct_", "acct_../v2/core/events"])
+    def test_something_that_is_not_an_account_id_is_422(
+        self, dev_api, stripe_api, seed_client, bad
+    ):
+        response = dev_api.put(
+            f"/connected-accounts/{uuid.uuid4()}",
+            json={"stripe_account_id": bad},
+            headers=seed_client,
+        )
+        assert_error(response, 422, "invalid_account_id")
+        assert not stripe_api.calls
 
 
 # ---------------------------------------------------------------- POST /webhooks/stripe-connect
