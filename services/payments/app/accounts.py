@@ -3,7 +3,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Engine, select, update
+from sqlalchemy import Engine, delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.db import connected_account
@@ -47,6 +47,40 @@ def insert_if_missing(
                 connected_account.c.account_sub == account_sub
             )
         ).scalar_one()
+
+
+def link(
+    engine: Engine, account_sub: uuid.UUID, stripe_account_id: str, caps: Capabilities
+) -> bool:
+    """Makes this seller the owner of an existing Stripe account (T051, the dev seed job).
+
+    The account leaves whichever seller had it, and the seller leaves whichever account they
+    had, so the same call after a rebuild or for a re-created user ends in the same state.
+    True when a row had to be moved or replaced."""
+    with engine.begin() as conn:
+        moved = conn.execute(
+            delete(connected_account).where(
+                (connected_account.c.stripe_account_id == stripe_account_id)
+                & (connected_account.c.account_sub != account_sub)
+            )
+        ).rowcount
+        values = {
+            "stripe_account_id": stripe_account_id,
+            "card_payments_status": caps.card_payments,
+            "stripe_transfers_status": caps.stripe_transfers,
+            "updated_at": datetime.now(UTC),
+        }
+        previous = conn.execute(
+            select(connected_account.c.stripe_account_id).where(
+                connected_account.c.account_sub == account_sub
+            )
+        ).scalar_one_or_none()
+        conn.execute(
+            insert(connected_account)
+            .values(account_sub=account_sub, **values)
+            .on_conflict_do_update(index_elements=["account_sub"], set_=values)
+        )
+        return moved > 0 or previous not in (None, stripe_account_id)
 
 
 def apply_capabilities(engine: Engine, stripe_account_id: str, caps: Capabilities) -> bool:

@@ -43,6 +43,10 @@ class Settings:
     # After an account event leaves the seller not ready, read the account once more this many
     # seconds later (Stripe's account read can lag its events slightly).
     event_recheck_seconds: float = 10.0
+    # The one client allowed to attach a seller to an existing Stripe account through
+    # PUT /connected-accounts/{sub} (T051: the dev seed job). Empty, the default, means the
+    # route answers 404 for everyone; it is set in sv-dev only.
+    account_link_azp: str = ""
 
     def validate(self) -> None:
         """Fail closed: an empty issuer, audience or azp would silently switch a check off."""
@@ -82,6 +86,7 @@ class Settings:
             stripe_secret_key=env.get("STRIPE_SECRET_KEY", ""),
             stripe_webhook_secret=env.get("STRIPE_WEBHOOK_SECRET", ""),
             public_base_url=env.get("PUBLIC_BASE_URL", "").rstrip("/"),
+            account_link_azp=env.get("ACCOUNT_LINK_AZP", "").strip(),
             event_recheck_seconds=float(
                 env.get("EVENT_RECHECK_SECONDS", defaults.event_recheck_seconds)
             ),

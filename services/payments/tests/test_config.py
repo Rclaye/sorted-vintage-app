@@ -35,3 +35,9 @@ def test_missing_stripe_key_refuses_to_start(settings):
 
 def test_webhooks_are_public_paths():
     assert "/webhooks/stripe-connect" in Settings().public_paths
+
+
+def test_the_account_link_route_is_off_unless_a_client_is_named(monkeypatch):
+    assert Settings().account_link_azp == ""
+    monkeypatch.setenv("ACCOUNT_LINK_AZP", " seed ")
+    assert Settings.from_env().account_link_azp == "seed"

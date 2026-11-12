@@ -26,6 +26,7 @@ changes with `copier update`.
 | `STRIPE_SECRET_KEY` | The environment's Stripe sandbox key (Secret `stripe`, key `secret-key`) |
 | `STRIPE_WEBHOOK_SECRET` | The signing secret `stripe listen` uses (Secret `stripe`, key `webhook-secret`) |
 | `PUBLIC_BASE_URL` | Where onboarding returns the seller, e.g. `https://dev.sortedvtg.lan:8443` |
+| `ACCOUNT_LINK_AZP` | The one client that may call `PUT /connected-accounts/{sub}` (`seed`, in `sv-dev` only); empty turns the route off |
 | `RECONCILE_INTERVAL_SECONDS` | Onboarding reconciliation interval (default 300; 0 turns it off) |
 
 `DATABASE_URL` (`postgresql://user:password@pg-rw:5432/payments?sslmode=require`), the Stripe key,
@@ -36,6 +37,7 @@ Alembic migrations (`migrations/`) run at startup under a Postgres advisory lock
 
 - `POST /connected-accounts/me/onboarding-link`: creates the caller's Accounts v2 account once and returns a fresh Stripe-hosted link (T043).
 - `GET /connected-accounts/{account_sub}/payout-status`: `none`, `pending` or `ready`; the seller or Listings only (T043).
+- `PUT /connected-accounts/{account_sub}`: dev seed only (T051); attaches a seller to an existing Stripe account after reading it from Stripe. 404 unless `ACCOUNT_LINK_AZP` is set, 403 for any other client.
 - `POST /webhooks/stripe-connect`: signed thin events, stored once and applied by reading the account from Stripe (T044).
 - Reconciliation at startup and every 5 minutes for accounts that are not ready (T045).
 
