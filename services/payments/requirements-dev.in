@@ -5,3 +5,4 @@ pytest-cov
 ruff==0.17.3
 testcontainers[postgres]
 respx
+hypothesis
