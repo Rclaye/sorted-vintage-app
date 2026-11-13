@@ -14,7 +14,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
-/** Runs V1 on a real Postgres (needs Docker; skipped without it, always runs in CI). */
+/** Runs the migrations on a real Postgres (needs Docker; skipped without it, always runs in CI). */
 @SpringBootTest(properties = {
         "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://127.0.0.1:1/certs",
         "spring.security.oauth2.resourceserver.jwt.issuer-uri=" + TestTokens.ISSUER,
@@ -38,14 +38,35 @@ class FlywayMigrationTest {
     DataSource dataSource;
 
     @Test
-    void v1IsApplied() {
+    void migrationsAreApplied() {
         String version = jdbc.queryForObject(
                 "select version from flyway_schema_history where success order by installed_rank desc limit 1",
                 String.class);
-        assertThat(version).isEqualTo("1");
+        assertThat(version).isEqualTo("2");
         assertThat(jdbc.queryForList(
                 "select table_name from information_schema.tables where table_schema = 'public'", String.class))
-                .contains("seller_profile", "listing", "photo");
+                .contains("seller_profile", "listing", "photo", "reservation");
+    }
+
+    /** V2 (T059): the database itself refuses a second active reservation on one listing. */
+    @Test
+    void oneActiveReservationPerListing() {
+        UUID seller = UUID.randomUUID();
+        UUID listing = UUID.randomUUID();
+        jdbc.update("insert into seller_profile (account_sub, display_name) values (?, 'Sam')", seller);
+        jdbc.update("""
+                insert into listing (id, seller_sub, title, brand, category, size, condition, price_cents, status)
+                values (?, ?, 'Corduroy jacket', 'Levi''s', 'outerwear', 'M', 'good', 4500, 'reserved')
+                """, listing, seller);
+        String hold = """
+                insert into reservation (id, listing_id, buyer_sub, order_id, price_cents, expires_at, state)
+                values (?, ?, ?, ?, 4500, now() + interval '10 minutes', ?)
+                """;
+        jdbc.update(hold, UUID.randomUUID(), listing, UUID.randomUUID(), UUID.randomUUID(), "released");
+        jdbc.update(hold, UUID.randomUUID(), listing, UUID.randomUUID(), UUID.randomUUID(), "active");
+
+        assertThatThrownBy(() -> jdbc.update(hold, UUID.randomUUID(), listing, UUID.randomUUID(), UUID.randomUUID(),
+                "active")).as("second active hold").isNotNull();
     }
 
     @Test

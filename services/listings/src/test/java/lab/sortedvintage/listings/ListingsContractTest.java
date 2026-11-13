@@ -821,10 +821,9 @@ class ListingsContractTest {
     /**
      * T053: POST /listings/{id}/reservations (Orders, with the buyer's token), and
      * POST /reservations/{id}/consume and /release (Orders, with its own client-credentials token).
-     * Contract first (Ticket 3.2): the routes arrive with T059 and T060 (Ticket 3.3).
+     * Written first in Ticket 3.2; the routes arrived with T059 and T060 (Ticket 3.3).
      */
     @Nested
-    @Pending("T059, T060 (Ticket 3.3)")
     class Reservations {
 
         final String orders = TOKENS.service("orders");
