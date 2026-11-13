@@ -1,0 +1,7 @@
+# Changes here will be overwritten by Copier
+_src_path: templates/service-fastapi
+service_description: Order emails to buyers and sellers, once per event
+service_name: notifications
+token_check: audience
+uses_database: true
+uses_queue: true

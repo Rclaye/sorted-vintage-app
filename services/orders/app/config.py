@@ -1,0 +1,52 @@
+"""Settings, read once from environment variables."""
+
+import os
+from dataclasses import dataclass
+
+
+def _csv(value: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+@dataclass(frozen=True)
+class Settings:
+    service_name: str = "orders"
+    env: str = "local"
+    log_level: str = "INFO"
+    # Keycloak: tokens must be signed by a key in jwks_url. Then either aud must contain
+    # jwt_audience, or (jwt_audience empty) azp must equal jwt_azp.
+    jwt_audience: str = "orders"
+    jwt_azp: str = ""
+    jwt_issuer: str = ""
+    jwks_url: str = ""
+    # Dependencies that /healthz probes with a TCP connect. Empty means not used.
+    database_url: str = ""
+    amqp_url: str = ""
+    # OTLP/HTTP collector, e.g. http://otel-collector.monitoring:4318. Empty disables export.
+    otlp_endpoint: str = ""
+    public_paths: tuple[str, ...] = ("/healthz", "/metrics")
+
+    def validate(self) -> None:
+        """Fail closed: an empty issuer, audience or azp would silently switch a check off."""
+        if not self.jwt_issuer:
+            raise RuntimeError("JWT_ISSUER is not set: tokens cannot be verified without it.")
+        if not (self.jwt_audience or self.jwt_azp):
+            raise RuntimeError("Set JWT_AUDIENCE or JWT_AZP: a service must check one of them.")
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        env = os.environ
+        defaults = cls()
+        return cls(
+            service_name=env.get("SERVICE_NAME", defaults.service_name),
+            env=env.get("ENV", defaults.env),
+            log_level=env.get("LOG_LEVEL", defaults.log_level).upper(),
+            jwt_audience=env.get("JWT_AUDIENCE", defaults.jwt_audience),
+            jwt_azp=env.get("JWT_AZP", defaults.jwt_azp),
+            jwt_issuer=env.get("JWT_ISSUER", ""),
+            jwks_url=env.get("JWKS_URL", ""),
+            database_url=env.get("DATABASE_URL", ""),
+            amqp_url=env.get("AMQP_URL", ""),
+            otlp_endpoint=env.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+            public_paths=_csv(env.get("PUBLIC_PATHS", "")) or defaults.public_paths,
+        )

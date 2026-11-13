@@ -1,0 +1,57 @@
+# Meets the T026 policies: non-root, CPU and memory requests and limits, image from ghcr.io/rclaye/.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders
+  labels: { app.kubernetes.io/name: orders }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: orders }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: orders }
+    spec:
+      serviceAccountName: orders
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: orders
+          image: ghcr.io/rclaye/sv-orders:unset # the tag is set per overlay by the build workflow
+          ports:
+            - { name: http, containerPort: 8000 }
+          env:
+            - { name: SERVICE_NAME, value: orders }
+            - { name: JWT_AUDIENCE, value: orders }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.monitoring:4318" }
+            # Secret from Terraform; each overlay adds DATABASE_URL built from these two.
+            - name: DB_USER
+              valueFrom: { secretKeyRef: { name: pg-orders-app, key: username } }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: pg-orders-app, key: password } }
+            - name: AMQP_URL
+              # Placeholder until per-service RabbitMQ users exist (Messaging Topology Operator).
+              valueFrom: { secretKeyRef: { name: orders-amqp, key: url } }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http } # not /healthz: a database outage must not restart the pod
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }

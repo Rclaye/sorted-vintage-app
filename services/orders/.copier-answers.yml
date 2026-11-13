@@ -1,0 +1,7 @@
+# Changes here will be overwritten by Copier
+_src_path: templates/service-fastapi
+service_description: Checkout, order state, expiry and the outbox to RabbitMQ
+service_name: orders
+token_check: audience
+uses_database: true
+uses_queue: true
