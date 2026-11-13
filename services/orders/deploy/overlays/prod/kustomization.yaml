@@ -1,0 +1,28 @@
+# The build workflow (T029) rewrites newTag with the git SHA of the image it pushed.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sv-prod
+resources:
+  - ../../base
+images:
+  - name: ghcr.io/rclaye/sv-orders
+    newTag: unset
+replicas:
+  - { name: orders, count: 2 }
+patches:
+  - target: { kind: Deployment, name: orders }
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: ENV, value: prod }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: JWT_ISSUER, value: "https://auth.sortedvtg.lan:8443/realms/sv-prod" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: JWKS_URL, value: "http://keycloak-http.keycloak.svc.cluster.local/realms/sv-prod/protocol/openid-connect/certs" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: DATABASE_URL
+          value: "postgresql://$(DB_USER):$(DB_PASSWORD)@pg-rw.sv-prod.svc:5432/orders"

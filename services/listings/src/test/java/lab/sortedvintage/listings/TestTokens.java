@@ -81,7 +81,18 @@ public final class TestTokens {
                 accountSub, displayName);
     }
 
+    /** Another service's client-credentials token, e.g. Orders' (azp orders, listings in aud). */
+    public String service(String azp) {
+        return token(ISSUER, List.of("listings", "payments"), Instant.now().plusSeconds(300),
+                UUID.randomUUID(), null, azp);
+    }
+
     private String token(String issuer, List<String> audience, Instant expires, UUID subject, String displayName) {
+        return token(issuer, audience, expires, subject, displayName, "bff");
+    }
+
+    private String token(String issuer, List<String> audience, Instant expires, UUID subject, String displayName,
+            String azp) {
         try {
             JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder()
                     .issuer(issuer)
@@ -90,7 +101,7 @@ public final class TestTokens {
                     .issueTime(Date.from(Instant.now().minusSeconds(60)))
                     .expirationTime(Date.from(expires))
                     .claim("typ", "Bearer")
-                    .claim("azp", "bff");
+                    .claim("azp", azp);
             if (displayName != null) {
                 builder.claim("display_name", displayName);
             }

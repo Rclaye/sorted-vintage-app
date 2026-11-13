@@ -816,6 +816,164 @@ class ListingsContractTest {
         }
     }
 
+    // ---------------------------------------------------------------- reservations (T053, Sprint 3)
+
+    /**
+     * T053: POST /listings/{id}/reservations (Orders, with the buyer's token), and
+     * POST /reservations/{id}/consume and /release (Orders, with its own client-credentials token).
+     * Contract first (Ticket 3.2): the routes arrive with T059 and T060 (Ticket 3.3).
+     */
+    @Nested
+    @Pending("T059, T060 (Ticket 3.3)")
+    class Reservations {
+
+        final String orders = TOKENS.service("orders");
+
+        Resp reserve(JsonNode listing, String token, UUID orderId) {
+            return send(HttpMethod.POST, "/listings/" + id(listing) + "/reservations", token,
+                    Map.of("order_id", orderId.toString()));
+        }
+
+        String status(JsonNode listing) {
+            return jdbc.queryForObject("select status::text from listing where id = ?::uuid", String.class, id(listing));
+        }
+
+        @Test
+        void reservesAnAvailableListingForTenMinutes() {
+            Seller seller = newSeller("Sam");
+            Seller buyer = newSeller("Bo");
+            JsonNode listing = publishWithPhoto(seller, input(brand()));
+            UUID orderId = UUID.randomUUID();
+
+            Resp held = reserve(listing, buyer.token(), orderId);
+
+            assertThat(held.status()).as("reserve: %s", held.raw()).isEqualTo(201);
+            JsonNode r = held.body();
+            assertThat(r.path("id").asString()).isNotBlank();
+            assertThat(r.path("listing_id").asString()).isEqualTo(id(listing));
+            assertThat(r.path("order_id").asString()).isEqualTo(orderId.toString());
+            assertThat(r.path("price_cents").asInt()).isEqualTo(4500);
+            assertThat(r.path("seller_sub").asString()).isEqualTo(seller.sub().toString());
+            java.time.Instant expires = java.time.Instant.parse(r.path("expires_at").asString());
+            assertThat(Duration.between(java.time.Instant.now(), expires))
+                    .isBetween(Duration.ofMinutes(9), Duration.ofMinutes(10).plusSeconds(5));
+            assertThat(status(listing)).isEqualTo("reserved");
+            assertThat(browse("brand=" + listing.path("brand").asString()).path("items").size()).isZero();
+        }
+
+        @Test
+        void exactlyOneOfTwoConcurrentReservationsWins() throws Exception {
+            JsonNode listing = publishWithPhoto(newSeller("Sam"), input(brand()));
+            Seller first = newSeller("Ana");
+            Seller second = newSeller("Ben");
+            java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+            try {
+                List<java.util.concurrent.Future<Resp>> results = new ArrayList<>();
+                for (Seller buyer : List.of(first, second)) {
+                    results.add(pool.submit(() -> {
+                        go.await();
+                        return reserve(listing, buyer.token(), UUID.randomUUID());
+                    }));
+                }
+                go.countDown();
+                List<Integer> statuses = new ArrayList<>();
+                for (java.util.concurrent.Future<Resp> f : results) {
+                    Resp resp = f.get(30, java.util.concurrent.TimeUnit.SECONDS);
+                    statuses.add(resp.status());
+                    if (resp.status() == 409) {
+                        assertThat(resp.body().path("error").asString()).isEqualTo("not_available");
+                    }
+                }
+                assertThat(statuses).containsExactlyInAnyOrder(201, 409);
+            } finally {
+                pool.shutdownNow();
+            }
+            assertThat(jdbc.queryForObject(
+                    "select count(*) from reservation where listing_id = ?::uuid and state = 'active'",
+                    Integer.class, id(listing))).isEqualTo(1);
+        }
+
+        @Test
+        void aSellerCannotReserveTheirOwnListing() {
+            Seller seller = newSeller("Sam");
+            JsonNode listing = publishWithPhoto(seller, input(brand()));
+            assertError(reserve(listing, seller.token(), UUID.randomUUID()), 403, "own_listing");
+            assertThat(status(listing)).isEqualTo("available");
+        }
+
+        @Test
+        void aDraftOrAReservedListingIsNotAvailable() {
+            Seller seller = newSeller("Sam");
+            JsonNode draft = createDraft(seller, input(brand()));
+            assertError(reserve(draft, newSeller("Bo").token(), UUID.randomUUID()), 409, "not_available");
+
+            JsonNode listing = publishWithPhoto(seller, input(brand()));
+            assertThat(reserve(listing, newSeller("Bo").token(), UUID.randomUUID()).status()).isEqualTo(201);
+            assertError(reserve(listing, newSeller("Cy").token(), UUID.randomUUID()), 409, "not_available");
+        }
+
+        @Test
+        void consumeSellsTheListingOnceAndIsIdempotent() {
+            Seller seller = newSeller("Sam");
+            JsonNode listing = publishWithPhoto(seller, input(brand()));
+            String reservation = reserve(listing, newSeller("Bo").token(), UUID.randomUUID()).body().path("id").asString();
+
+            for (int i = 0; i < 2; i++) {
+                Resp sold = send(HttpMethod.POST, "/reservations/" + reservation + "/consume", orders, null);
+                assertThat(sold.status()).as("consume %d: %s", i, sold.raw()).isEqualTo(200);
+            }
+
+            assertThat(status(listing)).isEqualTo("sold");
+            JsonNode profile = send(HttpMethod.GET, "/sellers/" + seller.sub(), null, null).body();
+            assertThat(profile.path("sold_count").asInt()).isEqualTo(1);
+        }
+
+        @Test
+        void releaseMakesTheListingAvailableAgainAndThenConsumeIsRefused() {
+            JsonNode listing = publishWithPhoto(newSeller("Sam"), input(brand()));
+            String reservation = reserve(listing, newSeller("Bo").token(), UUID.randomUUID()).body().path("id").asString();
+
+            for (int i = 0; i < 2; i++) {
+                assertThat(send(HttpMethod.POST, "/reservations/" + reservation + "/release", orders, null).status())
+                        .isEqualTo(200);
+            }
+            assertThat(status(listing)).isEqualTo("available");
+            assertError(send(HttpMethod.POST, "/reservations/" + reservation + "/consume", orders, null),
+                    409, "reservation_released");
+        }
+
+        @Test
+        void onlyOrdersMayConsumeOrRelease() {
+            JsonNode listing = publishWithPhoto(newSeller("Sam"), input(brand()));
+            Seller buyer = newSeller("Bo");
+            String reservation = reserve(listing, buyer.token(), UUID.randomUUID()).body().path("id").asString();
+
+            for (String action : List.of("consume", "release")) {
+                Resp resp = send(HttpMethod.POST, "/reservations/" + reservation + "/" + action, buyer.token(), null);
+                assertThat(resp.status()).as(action).isEqualTo(403);
+            }
+            assertThat(status(listing)).isEqualTo("reserved");
+        }
+
+        @Test
+        void anExpiredReservationIsReleasedWithinAMinute() throws Exception {
+            JsonNode listing = publishWithPhoto(newSeller("Sam"), input(brand()));
+            String reservation = reserve(listing, newSeller("Bo").token(), UUID.randomUUID()).body().path("id").asString();
+            jdbc.update("update reservation set expires_at = now() - interval '1 second' where id = ?::uuid",
+                    reservation);
+
+            long deadline = System.nanoTime() + Duration.ofSeconds(45).toNanos();
+            while (!"available".equals(status(listing)) && System.nanoTime() < deadline) {
+                Thread.sleep(1000);
+            }
+
+            assertThat(status(listing)).isEqualTo("available");
+            assertThat(jdbc.queryForObject("select state::text from reservation where id = ?::uuid", String.class,
+                    reservation)).isEqualTo("released");
+        }
+    }
+
     // ================================================================ helpers
 
     static String photoId(Resp upload) {
