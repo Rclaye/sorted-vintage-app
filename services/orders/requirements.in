@@ -7,3 +7,8 @@ opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-httpx
+# Orders (Ticket 3.4): Postgres and its migrations, and the outbox relay to RabbitMQ (research R8, R9)
+sqlalchemy
+psycopg[binary]
+alembic
+aio-pika

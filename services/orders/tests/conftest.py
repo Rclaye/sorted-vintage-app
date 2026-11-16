@@ -63,7 +63,17 @@ def make_token(private_key) -> Callable[..., str]:
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(env="test", jwt_issuer=ISSUER, log_level="INFO")
+    return Settings(
+        env="test",
+        jwt_issuer=ISSUER,
+        log_level="INFO",
+        # Never connected to by these tests: the engine connects lazily and lifespan is not run.
+        database_url="postgresql://test:test@127.0.0.1:1/test",
+        amqp_url="amqp://test:test@127.0.0.1:1/",
+        keycloak_client_secret="not-used",
+        expiry_interval_seconds=0,
+        relay_interval_seconds=0,
+    )
 
 
 @pytest.fixture
