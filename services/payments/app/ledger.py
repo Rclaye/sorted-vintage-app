@@ -9,7 +9,7 @@ unique (order_id, party, kind) makes writing either pair twice a no-op.
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Context, Decimal
 
 from fastapi import APIRouter, Request
 from sqlalchemy import Connection, Engine, select
@@ -29,9 +29,13 @@ class Entry:
     amount_cents: int
 
 
+# Exact for any amount an order can have: 28 digits, and halves always round up (R7).
+_MONEY = Context(prec=28, rounding=ROUND_HALF_UP)
+
+
 def platform_fee(amount_cents: int, fee_pct: Number) -> int:
-    fee = Decimal(amount_cents) * Decimal(str(fee_pct)) / 100
-    return int(fee.quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    product = _MONEY.multiply(Decimal(amount_cents), Decimal(str(fee_pct)))
+    return int(_MONEY.quantize(_MONEY.divide(product, Decimal(100)), Decimal(1)))
 
 
 def split(amount_cents: int, fee_pct: Number) -> tuple[int, int]:
