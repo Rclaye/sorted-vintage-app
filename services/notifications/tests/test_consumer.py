@@ -1,5 +1,6 @@
 """T072: retries, dead-lettering and the parts of the consumer the contract does not fix."""
 
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime
@@ -211,3 +212,41 @@ async def test_process_requeues_when_handling_itself_fails(monkeypatch):
     m = FakeMessage(body, "order.paid", {})
     assert await process(consumer, m) == "requeue"
     assert m.settled == "nack requeue=True"
+
+
+async def test_two_copies_of_one_event_at_the_same_moment_send_once():
+    class SlowMailer(Mailer):
+        async def send(self, to, template, context):
+            await asyncio.sleep(0.05)  # the other copy runs meanwhile
+            await super().send(to, template, context)
+
+    mailer = SlowMailer()
+    consumer = Consumer(mailer=mailer, users=Users(), store=MemoryStore())
+    _, body = message()
+
+    outcomes = await asyncio.gather(deliver(consumer, body), deliver(consumer, body))
+
+    assert outcomes == ["ack", "ack"]
+    assert sorted(t for _, t, _ in mailer.sent) == ["item_sold_seller", "order_confirmation_buyer"]
+    assert consumer._locks == {}  # nothing kept once both are done
+
+
+async def test_different_events_do_not_wait_for_each_other():
+    gate = asyncio.Event()
+
+    class GatedMailer(Mailer):
+        async def send(self, to, template, context):
+            if context["order"]["amount_cents"] == 1:
+                await gate.wait()
+            await super().send(to, template, context)
+
+    mailer = GatedMailer()
+    consumer = Consumer(mailer=mailer, users=Users(), store=MemoryStore())
+    _, held = message(amount_cents=1)
+    _, free = message()
+
+    first = asyncio.create_task(deliver(consumer, held))
+    await asyncio.sleep(0)
+    assert await asyncio.wait_for(deliver(consumer, free), 2) == "ack"
+    gate.set()
+    assert await first == "ack"

@@ -15,6 +15,7 @@ The queue's own x-delivery-limit of 5 is the backstop: a message whose handling 
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
@@ -30,6 +31,11 @@ from app.store import MAX_ATTEMPTS, MemoryStore, Store
 log = logging.getLogger(__name__)
 
 _PROPAGATOR = TraceContextTextMapPropagator()
+
+# Seconds allowed to reach RabbitMQ, and to let go of it at shutdown, before giving up: a broker
+# that accepts a socket but never answers must not hold the service (or a test) forever.
+CONNECT_TIMEOUT = 15.0
+CLOSE_TIMEOUT = 5.0
 
 # Which emails each event sends: (template, whose address).
 PLANS: dict[str, tuple[tuple[str, str], ...]] = {
@@ -88,6 +94,21 @@ class Consumer:
         self.titles = titles
         # Called with (template, result) after each send attempt; the metrics counter.
         self.on_send = on_send or (lambda template, result: None)
+        # Two copies of one event handled at the same moment (prefetch > 1) take turns, so the
+        # second finds the rows the first sent instead of sending them again.
+        self._locks: dict[uuid.UUID, list] = {}
+
+    @contextlib.asynccontextmanager
+    async def _one_at_a_time(self, event_id: uuid.UUID):
+        entry = self._locks.setdefault(event_id, [asyncio.Lock(), 0])
+        entry[1] += 1
+        try:
+            async with entry[0]:
+                yield
+        finally:
+            entry[1] -= 1
+            if entry[1] == 0:
+                del self._locks[event_id]
 
     async def handle(self, *, body: bytes, routing_key: str, headers: dict | None = None) -> str:
         try:
@@ -118,7 +139,11 @@ class Consumer:
             "order": order.model_dump(mode="json"),
             "listing_title": order.listing_title or await self._title(order.listing_id),
         }
-        delivery = _delivery_count(headers)
+        async with self._one_at_a_time(message.event_id):
+            return await self._send_all(message, plan, context, _delivery_count(headers))
+
+    async def _send_all(self, message: Envelope, plan, context: dict, delivery: int) -> str:
+        order = message.order
         worst = 0
         failed: list[str] = []
         for template, who in plan:
@@ -241,29 +266,52 @@ async def run_forever(
     retry_seconds: float = 5.0,
 ) -> None:
     """Consumes until cancelled. The queue is declared by the Messaging Topology Operator (T070);
-    this only checks it is there. A lost connection is retried."""
+    this only checks it is there. Once connected, the robust connection reconnects and resumes
+    consuming on its own; a failure to connect or to find the queue is retried here."""
     import aio_pika
 
-    running: set[asyncio.Task] = set()
     while True:
         connection = None
+        running: set[asyncio.Task] = set()
+        on_message = _dispatcher(consumer, tracer, running)
         try:
-            connection = await aio_pika.connect_robust(amqp_url)
+            connection = await asyncio.wait_for(
+                aio_pika.connect_robust(amqp_url, timeout=CONNECT_TIMEOUT), CONNECT_TIMEOUT
+            )
             channel = await connection.channel()
             await channel.set_qos(prefetch_count=prefetch)
             queue = await channel.get_queue(queue_name, ensure=True)
+            await queue.consume(on_message)
             log.info("consuming", extra={"queue": queue_name})
-            async with queue.iterator() as messages:
-                async for message in messages:
-                    # Up to `prefetch` messages at once; a held reference keeps each task alive.
-                    task = asyncio.create_task(process(consumer, message, tracer))
-                    running.add(task)
-                    task.add_done_callback(running.discard)
+            await asyncio.Future()  # until cancelled
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("consumer connection failed; retrying")
+            log.exception("consumer could not start; retrying")
         finally:
-            if connection is not None and not connection.is_closed:
-                await connection.close()
+            await _let_go(connection, running)
         await asyncio.sleep(retry_seconds)
+
+
+def _dispatcher(consumer: Consumer, tracer, running: set[asyncio.Task]):
+    """The queue callback for one connection: each message in its own task, up to `prefetch`
+    at once, held in `running` so it stays alive and can be stopped at shutdown."""
+
+    async def on_message(message) -> None:
+        task = asyncio.create_task(process(consumer, message, tracer))
+        running.add(task)
+        task.add_done_callback(running.discard)
+
+    return on_message
+
+
+async def _let_go(connection, running: set[asyncio.Task]) -> None:
+    """Stops in-flight messages (unsettled ones are delivered again) and closes the connection,
+    each within CLOSE_TIMEOUT."""
+    for task in list(running):
+        task.cancel()
+    if running:
+        await asyncio.wait(running, timeout=CLOSE_TIMEOUT)
+    if connection is not None and not connection.is_closed:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(connection.close(), CLOSE_TIMEOUT)
