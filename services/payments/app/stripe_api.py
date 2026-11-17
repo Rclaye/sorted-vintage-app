@@ -1,6 +1,7 @@
-"""The Stripe calls Payments makes for Connect onboarding, on Accounts v2 (research R17).
+"""The Stripe calls Payments makes: Connect onboarding on Accounts v2 (research R17) and, since
+Ticket 3.5, destination charges, cancels and refunds (research R7, R8; Sprint 3 spike).
 
-Everything Stripe-shaped stays here: the routes and the reconciler see account IDs and capability
+Everything Stripe-shaped stays here: the routes, the worker and the reconcilers see ids and
 statuses only. HTTP goes through httpx, so tests answer for Stripe with respx.
 """
 
@@ -58,6 +59,10 @@ class StripeConnect:
     def __init__(self, client: stripe.StripeClient):
         self._client = client
 
+    @property
+    def client(self) -> stripe.StripeClient:
+        return self._client
+
     def create_account(self, account_sub: str, contact_email: str) -> tuple[str, Capabilities]:
         """A seller's connected account with the R17 settings. Idempotent per seller.
 
@@ -114,15 +119,96 @@ class StripeConnect:
 
     @staticmethod
     def _call(method, params, options=None):
-        try:
-            return method(params, options) if options else method(params)
-        except (stripe.APIConnectionError, stripe.RateLimitError) as exc:
+        return _call(method, params, options)
+
+
+def _call(method, params, options=None):
+    try:
+        return method(params, options) if options else method(params)
+    except (stripe.APIConnectionError, stripe.RateLimitError) as exc:
+        raise ProviderUnavailableError(str(exc)) from exc
+    except stripe.StripeError as exc:
+        status = getattr(exc, "http_status", None) or 0
+        if status >= 500:
             raise ProviderUnavailableError(str(exc)) from exc
-        except stripe.StripeError as exc:
-            status = getattr(exc, "http_status", None) or 0
-            if status >= 500:
-                raise ProviderUnavailableError(str(exc)) from exc
-            raise ProviderRejectedError(str(exc)) from exc
+        rejected = ProviderRejectedError(str(exc))
+        rejected.code = getattr(exc, "code", None)
+        raise rejected from exc
+
+
+@dataclass(frozen=True)
+class Intent:
+    id: str
+    status: str
+    client_secret: str = ""
+    failure_code: str | None = None
+
+
+class StripeCharges:
+    """Destination charges (T066) and refunds (T068), as the Sprint 3 spike ran them."""
+
+    def __init__(self, client: stripe.StripeClient):
+        self._client = client
+
+    def create_intent(
+        self, order_id: str, amount_cents: int, fee_cents: int, destination: str
+    ) -> Intent:
+        """The seller's account receives the charge; the fee comes back to the platform. The
+        order ID is Stripe's idempotency key, so a retry returns the same PaymentIntent."""
+        intent = _call(
+            self._client.v1.payment_intents.create,
+            {
+                "amount": amount_cents,
+                "currency": "usd",
+                "application_fee_amount": fee_cents,
+                "transfer_data": {"destination": destination},
+                # No payment_method_types: this API version refuses it (T009).
+                "automatic_payment_methods": {"enabled": True},
+                "metadata": {"order_id": order_id},
+            },
+            {"idempotency_key": order_id},
+        )
+        return Intent(intent["id"], intent["status"], intent["client_secret"])
+
+    def cancel_intent(self, payment_intent_id: str) -> bool:
+        """True when this call cancelled it; False when it was already final (idempotent)."""
+        try:
+            _call(
+                lambda params: self._client.v1.payment_intents.cancel(payment_intent_id, params), {}
+            )
+        except ProviderRejectedError as exc:
+            if getattr(exc, "code", None) == "payment_intent_unexpected_state":
+                return False
+            raise
+        return True
+
+    def retrieve_intent(self, payment_intent_id: str) -> Intent:
+        intent = _call(
+            lambda params: self._client.v1.payment_intents.retrieve(payment_intent_id, params), {}
+        )
+        # A StripeObject is not a dict (no .get), and the field is absent until a try fails.
+        try:
+            code = intent["last_payment_error"]["code"]
+        except (KeyError, TypeError):
+            code = None
+        return Intent(intent["id"], intent["status"], failure_code=code)
+
+    def refund(self, payment_intent_id: str, order_id: str) -> None:
+        """Everything back: the buyer's money, the seller's transfer and the platform's fee."""
+        try:
+            _call(
+                self._client.v1.refunds.create,
+                {
+                    "payment_intent": payment_intent_id,
+                    "reverse_transfer": True,
+                    "refund_application_fee": True,
+                    "metadata": {"order_id": order_id},
+                },
+                {"idempotency_key": f"refund-{order_id}"},
+            )
+        except ProviderRejectedError as exc:
+            if getattr(exc, "code", None) != "charge_already_refunded":
+                raise
 
 
 def capabilities_of(account: Any) -> Capabilities:

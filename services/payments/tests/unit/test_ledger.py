@@ -3,8 +3,7 @@
 All amounts are integer cents. platform = round_half_up(amount × fee_pct / 100); the seller's
 share is the remainder, so the two always add up to what the buyer paid, with no rounding gap.
 
-Contract first (Ticket 3.2): `app.ledger` arrives with T068 (Ticket 3.5). Until then each test is
-a strict xfail; when T068 makes one pass, CI fails until its marker is removed.
+Written first (Ticket 3.2) as strict xfails; `app.ledger` arrived with T068 (Ticket 3.5).
 """
 
 from decimal import ROUND_HALF_UP, Decimal
@@ -12,8 +11,6 @@ from decimal import ROUND_HALF_UP, Decimal
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-
-PENDING = pytest.mark.xfail(reason="T068 (Ticket 3.5): app.ledger not built yet", strict=True)
 
 amounts = st.integers(min_value=100, max_value=1_000_000)
 # fee_pct is numeric(5,2) in Orders (T061): 0 to 100 with two decimals.
@@ -24,7 +21,6 @@ def expected_fee(amount: int, fee_pct: Decimal) -> int:
     return int((Decimal(amount) * fee_pct / 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
-@PENDING
 @given(amount=amounts, fee_pct=fee_pcts)
 def test_platform_fee_rounds_half_up(amount, fee_pct):
     from app.ledger import platform_fee
@@ -32,7 +28,6 @@ def test_platform_fee_rounds_half_up(amount, fee_pct):
     assert platform_fee(amount, fee_pct) == expected_fee(amount, fee_pct)
 
 
-@PENDING
 @given(amount=amounts, fee_pct=fee_pcts)
 def test_the_two_shares_always_sum_to_the_amount(amount, fee_pct):
     from app.ledger import split
@@ -43,7 +38,6 @@ def test_the_two_shares_always_sum_to_the_amount(amount, fee_pct):
     assert 0 <= platform <= amount and 0 <= seller <= amount
 
 
-@PENDING
 @pytest.mark.parametrize(
     ("amount", "fee_pct", "platform"),
     [
@@ -61,7 +55,6 @@ def test_known_values(amount, fee_pct, platform):
     assert split(amount, fee_pct) == (platform, amount - platform)
 
 
-@PENDING
 @given(amount=amounts, fee_pct=fee_pcts)
 def test_a_refund_is_the_exact_negative_of_the_sale(amount, fee_pct):
     from app.ledger import refund_entries, sale_entries
