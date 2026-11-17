@@ -6,8 +6,9 @@ and is rejected without requeue (so it dead-letters, FR-017). How the consumer i
 constructor, the Keycloak lookup, SMTP) is T072's to settle; it may adjust the fakes below when it
 removes the markers, but not the assertions.
 
-Contract first (Ticket 3.2): the consumer arrives with T071 and T072 (Ticket 3.6). Until then each
-test is a strict xfail; when the consumer makes one pass, CI fails until its marker is removed.
+Contract first (Ticket 3.2); the consumer arrived with T071 and T072 (Ticket 3.6), and the strict
+xfail markers came off. `store=None` gives the consumer its in-memory store, with the same rules
+as the Notification table (tests/test_store.py checks that one against Postgres).
 """
 
 import json
@@ -15,8 +16,6 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-
-PENDING = pytest.mark.xfail(reason="T071, T072 (Ticket 3.6): consumer not built yet", strict=True)
 
 TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
 
@@ -87,7 +86,6 @@ async def deliver(consumer, message: dict | bytes, routing_key: str, headers=Non
     )
 
 
-@PENDING
 async def test_order_paid_sends_the_buyer_and_the_seller_one_email_each(world):
     message = envelope("order.paid", "paid")
     consumer, mailer = world(message)
@@ -101,7 +99,6 @@ async def test_order_paid_sends_the_buyer_and_the_seller_one_email_each(world):
     assert all(m["context"]["order"]["id"] == message["order"]["id"] for m in mailer.sent)
 
 
-@PENDING
 async def test_order_refunded_sends_the_buyer_a_refund_notice(world):
     message = envelope("order.refunded", "refunded")
     consumer, mailer = world(message)
@@ -112,7 +109,6 @@ async def test_order_refunded_sends_the_buyer_a_refund_notice(world):
     ]
 
 
-@PENDING
 async def test_a_redelivered_event_sends_nothing_more(world):
     message = envelope("order.paid", "paid")
     consumer, mailer = world(message)
@@ -122,7 +118,6 @@ async def test_a_redelivered_event_sends_nothing_more(world):
     assert len(mailer.sent) == 2
 
 
-@PENDING
 @pytest.mark.parametrize(
     "broken",
     [
@@ -139,7 +134,6 @@ async def test_a_message_that_breaks_the_envelope_is_rejected_and_sends_nothing(
     assert mailer.sent == []
 
 
-@PENDING
 async def test_a_message_without_trace_context_is_still_handled(world):
     # traceparent is required on the wire (R9); a missing one must not lose the customer's email.
     message = envelope("order.paid", "paid")
