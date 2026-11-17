@@ -1,4 +1,10 @@
-"""T044: connected-account thin events from the forwarder (research R4, R17).
+"""The two webhook routes the Stripe forwarder posts to (research R4).
+
+T067, /webhooks/stripe: platform events. payment_intent.succeeded, .payment_failed and
+.canceled are stored once in the inbox and answered 200 at once; the inbox worker applies them
+to Orders (research R8). Other event types are acknowledged and not kept.
+
+T044, /webhooks/stripe-connect: connected-account thin events (research R17).
 
 The signature is checked before anything is read or stored. Each event is stored once in the
 Payment event inbox (a replay is a no-op, 200), and account events are applied by fetching the
@@ -28,8 +34,13 @@ ACCOUNT_EVENTS = frozenset({"v1.account.updated", "v1.capability.updated"})
 SIGNATURE_TOLERANCE_SECONDS = 300
 
 
-@router.post("/webhooks/stripe-connect")
-async def stripe_connect(request: Request, background: BackgroundTasks) -> dict:
+PAYMENT_EVENTS = frozenset(
+    {"payment_intent.succeeded", "payment_intent.payment_failed", "payment_intent.canceled"}
+)
+
+
+async def verified(request: Request, what: str) -> tuple[str, str, dict]:
+    """The event, only if its Stripe-Signature is good; nothing is read or stored otherwise."""
     payload = await request.body()
     secret = request.app.state.settings.stripe_webhook_secret
     try:
@@ -40,10 +51,34 @@ async def stripe_connect(request: Request, background: BackgroundTasks) -> dict:
             tolerance=SIGNATURE_TOLERANCE_SECONDS,
         )
         event = json.loads(payload)
-        event_id, event_type = str(event["id"]), str(event["type"])
+        return str(event["id"]), str(event["type"]), event
     except (stripe.SignatureVerificationError, ValueError, KeyError, TypeError) as exc:
-        log.warning("Connect webhook refused", extra={"reason": type(exc).__name__})
+        log.warning(f"{what} webhook refused", extra={"reason": type(exc).__name__})
         raise ApiError(400, "invalid_signature", "The Stripe signature is not valid.") from exc
+
+
+@router.post("/webhooks/stripe")
+async def stripe_platform(request: Request) -> dict:
+    event_id, event_type, event = await verified(request, "Platform")
+    if event_type not in PAYMENT_EVENTS:
+        return {"received": True, "ignored": True}
+    try:
+        payment_intent_id = str(event["data"]["object"]["id"])
+    except (KeyError, TypeError) as exc:
+        raise ApiError(400, "invalid_event", "The event has no PaymentIntent.") from exc
+    first = await asyncio.to_thread(
+        store, request.app.state.engine, event_id, event_type, "webhook", event, payment_intent_id
+    )
+    if not first:
+        log.info("duplicate payment event ignored", extra={"event_id": event_id})
+        return {"received": True, "duplicate": True}
+    log.info("payment event stored", extra={"event_id": event_id, "type": event_type})
+    return {"received": True}
+
+
+@router.post("/webhooks/stripe-connect")
+async def stripe_connect(request: Request, background: BackgroundTasks) -> dict:
+    event_id, event_type, event = await verified(request, "Connect")
 
     engine, connect = request.app.state.engine, request.app.state.connect
     # Database and Stripe calls are blocking, so they run off the event loop.
@@ -103,7 +138,14 @@ def related_account(event: dict) -> str | None:
     return context if isinstance(context, str) and context.startswith("acct_") else None
 
 
-def store(engine: Engine, event_id: str, event_type: str, source: str, payload: dict) -> bool:
+def store(
+    engine: Engine,
+    event_id: str,
+    event_type: str,
+    source: str,
+    payload: dict,
+    payment_intent_id: str | None = None,
+) -> bool:
     """Inserts the event once; False when it was already in the inbox."""
     with engine.begin() as conn:
         result = conn.execute(
@@ -112,7 +154,9 @@ def store(engine: Engine, event_id: str, event_type: str, source: str, payload: 
                 stripe_event_id=event_id,
                 type=event_type,
                 source=source,
+                payment_intent_id=payment_intent_id,
                 payload=payload,
+                attempts=0,
                 received_at=datetime.now(UTC),
             )
             .on_conflict_do_nothing(index_elements=["stripe_event_id"])

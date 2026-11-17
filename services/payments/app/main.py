@@ -5,14 +5,16 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator
 
+import httpx
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, Response
 from opentelemetry.sdk.trace import TracerProvider
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
 from sqlalchemy import Engine
 
+from app import charges as charges_routes
 from app import connect as connect_routes
-from app import webhooks
+from app import inbox_worker, ledger, webhooks
 from app.auth import JWTAuthMiddleware, KeycloakKeys, KeyResolver
 from app.config import Settings
 from app.db import make_engine, migrate
@@ -20,8 +22,9 @@ from app.errors import error_response, install_error_handlers
 from app.health import Check, checks_from_settings, failing
 from app.logging_json import configure_logging
 from app.metrics import MetricsMiddleware, make_histogram
+from app.orders_client import Orders
 from app.reconcile import run_forever
-from app.stripe_api import StripeConnect, make_client
+from app.stripe_api import StripeCharges, StripeConnect, make_client
 from app.telemetry import build_tracer_provider, instrument
 
 log = logging.getLogger(__name__)
@@ -50,22 +53,49 @@ def create_app(
 
     engine = engine or make_engine(settings.database_url)
     connect = connect or StripeConnect(make_client(settings.stripe_secret_key))
+    charges = StripeCharges(connect.client)
+    http = httpx.Client(timeout=httpx.Timeout(5.0, connect=2.0))
+    orders = Orders(
+        http,
+        settings.orders_url,
+        settings.token_url,
+        settings.keycloak_client_id,
+        settings.keycloak_client_secret,
+    )
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await asyncio.to_thread(migrate, engine)
-        task = None
+        tasks = []
         if settings.reconcile_interval_seconds > 0:
-            task = asyncio.create_task(
-                run_forever(engine, connect, settings.reconcile_interval_seconds)
+            tasks.append(
+                asyncio.create_task(
+                    run_forever(
+                        engine,
+                        connect,
+                        settings.reconcile_interval_seconds,
+                        charges,
+                        settings.pending_after_seconds,
+                    )
+                )
+            )
+        if settings.inbox_interval_seconds > 0:
+            tasks.append(
+                asyncio.create_task(
+                    inbox_worker.run_forever(
+                        engine, orders, charges, settings.inbox_interval_seconds
+                    )
+                )
             )
         try:
             yield
         finally:
-            if task:
+            for task in tasks:
                 task.cancel()
+            for task in tasks:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            http.close()
             engine.dispose()
 
     app = FastAPI(
@@ -76,6 +106,8 @@ def create_app(
     app.state.settings = settings
     app.state.engine = engine
     app.state.connect = connect
+    app.state.charges = charges
+    app.state.orders = orders
     install_error_handlers(app)
 
     registry = CollectorRegistry()
@@ -96,6 +128,8 @@ def create_app(
 
     # Each route needs a valid Keycloak token unless listed in PUBLIC_PATHS (the webhooks are).
     app.include_router(connect_routes.router)
+    app.include_router(charges_routes.router)
+    app.include_router(ledger.router)
     app.include_router(webhooks.router)
 
     # Last added is outermost: telemetry > metrics/logging > JWT > routes.

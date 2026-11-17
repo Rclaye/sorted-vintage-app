@@ -47,6 +47,18 @@ class Settings:
     # PUT /connected-accounts/{sub} (T051: the dev seed job). Empty, the default, means the
     # route answers 404 for everyone; it is set in sv-dev only.
     account_link_azp: str = ""
+    # Ticket 3.5. The one client allowed to create and cancel PaymentIntents.
+    orders_azp: str = "orders"
+    # Where the inbox worker reports payment outcomes, with Payments' own client-credentials
+    # token (research R8). The token URL is in-cluster; empty means the issuer's own endpoint.
+    orders_url: str = "http://orders"
+    keycloak_token_url: str = ""
+    keycloak_client_id: str = "payments"
+    keycloak_client_secret: str = ""
+    # Seconds between inbox worker passes; 0 turns the worker off (tests).
+    inbox_interval_seconds: float = 2.0
+    # T069: a PaymentIntent whose order is still open after this long is asked about at Stripe.
+    pending_after_seconds: float = 120.0
 
     def validate(self) -> None:
         """Fail closed: an empty issuer, audience or azp would silently switch a check off."""
@@ -61,11 +73,18 @@ class Settings:
                 ("STRIPE_SECRET_KEY", self.stripe_secret_key),
                 ("STRIPE_WEBHOOK_SECRET", self.stripe_webhook_secret),
                 ("PUBLIC_BASE_URL", self.public_base_url),
+                ("KEYCLOAK_CLIENT_SECRET", self.keycloak_client_secret),
             )
             if not value
         ]
         if missing:
             raise RuntimeError(f"Not set: {', '.join(missing)}. Payments cannot run without them.")
+
+    @property
+    def token_url(self) -> str:
+        return self.keycloak_token_url or (
+            self.jwt_issuer.rstrip("/") + "/protocol/openid-connect/token"
+        )
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -87,6 +106,17 @@ class Settings:
             stripe_webhook_secret=env.get("STRIPE_WEBHOOK_SECRET", ""),
             public_base_url=env.get("PUBLIC_BASE_URL", "").rstrip("/"),
             account_link_azp=env.get("ACCOUNT_LINK_AZP", "").strip(),
+            orders_azp=env.get("ORDERS_AZP", defaults.orders_azp),
+            orders_url=env.get("ORDERS_URL", defaults.orders_url).rstrip("/"),
+            keycloak_token_url=env.get("KEYCLOAK_TOKEN_URL", ""),
+            keycloak_client_id=env.get("KEYCLOAK_CLIENT_ID", defaults.keycloak_client_id),
+            keycloak_client_secret=env.get("KEYCLOAK_CLIENT_SECRET", ""),
+            inbox_interval_seconds=float(
+                env.get("INBOX_INTERVAL_SECONDS", defaults.inbox_interval_seconds)
+            ),
+            pending_after_seconds=float(
+                env.get("PENDING_AFTER_SECONDS", defaults.pending_after_seconds)
+            ),
             event_recheck_seconds=float(
                 env.get("EVENT_RECHECK_SECONDS", defaults.event_recheck_seconds)
             ),

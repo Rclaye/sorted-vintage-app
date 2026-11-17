@@ -71,6 +71,8 @@ def settings() -> Settings:
         database_url="postgresql://test:test@127.0.0.1:1/test",
         stripe_secret_key="sk_test_not_used",
         stripe_webhook_secret="whsec_not_used",
+        keycloak_client_secret="not-used",
+        inbox_interval_seconds=0,
         public_base_url="https://dev.sortedvtg.lan:8443",
         reconcile_interval_seconds=0,
     )

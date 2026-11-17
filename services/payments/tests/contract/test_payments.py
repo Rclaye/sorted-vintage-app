@@ -6,8 +6,9 @@ Stripe is answered by respx, as in test_connect.py, rather than stripe-mock: the
 request Payments sends, and the Sprint 3 spike (sprints/sprint-3/spikes.md) recorded what the
 sandbox really accepts and returns. Ticket 3.5 still makes one live sandbox call before it closes.
 
-Contract first (Ticket 3.2): the routes arrive with T066 to T068 (Ticket 3.5). Until then each
-test is a strict xfail; when a route makes one pass, CI fails until its marker is removed.
+Written first (Ticket 3.2) as strict xfails; the routes arrived with T066 to T068 (Ticket 3.5).
+The second half goes beyond the contract: the inbox worker against a fake Orders, refunds, and
+payment reconciliation (T067 to T069).
 """
 
 import json
@@ -19,14 +20,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
+from app import inbox_worker
 from app.db import make_engine, payment_event
+from app.ledger import entries_for
+from app.reconcile import reconcile_payments
 from tests.contract.test_connect import STRIPE, make_api, signed, store_account
 
 testcontainers = pytest.importorskip("testcontainers.postgres")
-
-
-def pending(task: str):
-    return pytest.mark.xfail(reason=f"{task} (Ticket 3.5): not built yet", strict=True)
 
 
 SELLER_ACCOUNT = "acct_1UaNnWKmlbGfFXXi"  # the shape of a real test account; never called
@@ -139,7 +139,6 @@ def inbox_count(engine, **where) -> int:
 # ---------------------------------------------------------------- POST /payment-intents (T066)
 
 
-@pending("T066")
 def test_a_destination_charge_for_a_ready_seller(api, stripe_api, orders_service, ready_seller):
     seller_sub, account = ready_seller
     route = stripe_api.post("/v1/payment_intents").mock(
@@ -164,7 +163,6 @@ def test_a_destination_charge_for_a_ready_seller(api, stripe_api, orders_service
     assert sent.headers["Idempotency-Key"] == body["order_id"]
 
 
-@pending("T066")
 def test_the_fee_rounds_half_up(api, stripe_api, orders_service, ready_seller):
     route = stripe_api.post("/v1/payment_intents").mock(
         return_value=httpx.Response(200, json=payment_intent_json("pi_contract_2"))
@@ -178,7 +176,6 @@ def test_the_fee_rounds_half_up(api, stripe_api, orders_service, ready_seller):
     assert body_of(route.calls.last.request)["application_fee_amount"] == "11"
 
 
-@pending("T066")
 def test_a_seller_without_a_ready_account_is_refused(api, stripe_api, orders_service, engine):
     not_ready = uuid.uuid4()
     store_account(engine, not_ready, f"acct_{uuid.uuid4().hex[:16]}")
@@ -190,7 +187,6 @@ def test_a_seller_without_a_ready_account_is_refused(api, stripe_api, orders_ser
     assert not route.called
 
 
-@pending("T066")
 def test_stripe_unreachable_is_503(api, stripe_api, orders_service, ready_seller):
     stripe_api.post("/v1/payment_intents").mock(side_effect=httpx.ConnectError("down"))
     r = api.post("/payment-intents", json=order_request(ready_seller[0]), headers=orders_service)
@@ -198,7 +194,6 @@ def test_stripe_unreachable_is_503(api, stripe_api, orders_service, ready_seller
     assert r.json()["error"] == "provider_unavailable"
 
 
-@pending("T066")
 def test_only_orders_may_create_payment_intents(api, stripe_api, buyer, ready_seller):
     route = stripe_api.post("/v1/payment_intents")
     r = api.post("/payment-intents", json=order_request(ready_seller[0]), headers=buyer)
@@ -206,7 +201,6 @@ def test_only_orders_may_create_payment_intents(api, stripe_api, buyer, ready_se
     assert not route.called
 
 
-@pending("T066")
 def test_the_client_secret_is_never_logged(api, stripe_api, orders_service, ready_seller, caplog):
     stripe_api.post("/v1/payment_intents").mock(
         return_value=httpx.Response(200, json=payment_intent_json("pi_contract_3"))
@@ -220,7 +214,6 @@ def test_the_client_secret_is_never_logged(api, stripe_api, orders_service, read
 # ---------------------------------------------------------------- cancel (T066)
 
 
-@pending("T066")
 def test_cancel_is_idempotent(api, stripe_api, orders_service):
     stripe_api.post("/v1/payment_intents/pi_contract_4/cancel").mock(
         side_effect=[
@@ -245,7 +238,6 @@ def test_cancel_is_idempotent(api, stripe_api, orders_service):
 # ---------------------------------------------------------------- POST /webhooks/stripe (T067)
 
 
-@pending("T067")
 def test_a_signed_platform_event_is_stored_in_the_inbox(api, engine):
     payload = platform_event("payment_intent.succeeded", "pi_contract_5", "evt_contract_5")
     r = api.post("/webhooks/stripe", content=payload, headers=signed(payload))
@@ -254,7 +246,6 @@ def test_a_signed_platform_event_is_stored_in_the_inbox(api, engine):
     assert inbox_count(engine, payment_intent_id="pi_contract_5") == 1
 
 
-@pending("T067")
 def test_a_replayed_platform_event_is_stored_once(api, engine):
     payload = platform_event("payment_intent.payment_failed", "pi_contract_6", "evt_contract_6")
     for _ in range(2):
@@ -265,7 +256,6 @@ def test_a_replayed_platform_event_is_stored_once(api, engine):
     assert inbox_count(engine, stripe_event_id="evt_contract_6") == 1
 
 
-@pending("T067")
 def test_a_bad_signature_stores_nothing(api, engine):
     payload = platform_event("payment_intent.succeeded", "pi_contract_7", "evt_contract_7")
     for headers in (
@@ -280,7 +270,6 @@ def test_a_bad_signature_stores_nothing(api, engine):
 # ---------------------------------------------------------------- GET /orders/{id}/ledger (T068)
 
 
-@pending("T068")
 def test_the_ledger_of_a_paid_order_sums_to_the_amount(api, engine, orders_service, ready_seller):
     from app.ledger import record_sale
 
@@ -301,7 +290,6 @@ def test_the_ledger_of_a_paid_order_sums_to_the_amount(api, engine, orders_servi
     assert [e["account_sub"] for e in entries if e["party"] == "platform"] == [None]
 
 
-@pending("T068")
 def test_a_sale_is_recorded_once(engine, ready_seller):
     from app.ledger import entries_for, record_sale
 
@@ -311,3 +299,211 @@ def test_a_sale_is_recorded_once(engine, ready_seller):
             engine, order_id=order_id, seller_sub=ready_seller[0], amount_cents=999, fee_pct=12.5
         )
     assert len(entries_for(engine, order_id)) == 2
+
+
+# ---------------------------------------------------------------- beyond the contract: T067-T069
+# The inbox worker against a fake Orders, the refund path and payment reconciliation.
+
+ORDERS = "http://orders"
+
+
+@pytest.fixture
+def orders_api():
+    """Orders and Keycloak's token endpoint as the worker sees them."""
+    import respx
+
+    with respx.mock(assert_all_called=False) as router:
+        router.post(url__regex=r".*/protocol/openid-connect/token$").mock(
+            return_value=httpx.Response(
+                200, json={"access_token": "payments-service-token", "expires_in": 300}
+            )
+        )
+        yield router
+
+
+def order_says(orders_api, order_id, status: str):
+    return orders_api.post(f"{ORDERS}/orders/{order_id}/payment-result").mock(
+        return_value=httpx.Response(200, json={"id": str(order_id), "status": status})
+    )
+
+
+@pytest.fixture
+def charge(api, stripe_api, orders_service, ready_seller):
+    """A PaymentIntent created through the API for a new order; returns (order_id, pi_id)."""
+
+    def make(amount=2500, fee_pct=10):
+        order_id, pi_id = uuid.uuid4(), f"pi_{uuid.uuid4().hex[:16]}"
+        stripe_api.post("/v1/payment_intents").mock(
+            return_value=httpx.Response(200, json=payment_intent_json(pi_id))
+        )
+        r = api.post(
+            "/payment-intents",
+            json=order_request(ready_seller[0], order_id, amount, fee_pct),
+            headers=orders_service,
+        )
+        assert r.status_code == 201
+        return order_id, pi_id
+
+    return make
+
+
+def deliver(api, event_type: str, pi_id: str) -> str:
+    event_id = f"evt_{uuid.uuid4().hex[:20]}"
+    payload = platform_event(event_type, pi_id, event_id)
+    assert api.post("/webhooks/stripe", content=payload, headers=signed(payload)).status_code == 200
+    return event_id
+
+
+def work(api, engine) -> int:
+    return inbox_worker.run_once(engine, api.app.state.orders, api.app.state.charges)
+
+
+def event_row(engine, event_id):
+    with engine.connect() as conn:
+        return conn.execute(
+            select(payment_event).where(payment_event.c.stripe_event_id == event_id)
+        ).one()
+
+
+def ledger_of(engine, order_id) -> set:
+    return {(e.party, e.kind, e.amount_cents) for e in entries_for(engine, order_id)}
+
+
+def test_a_success_orders_calls_paid_writes_the_sale(api, engine, orders_api, charge):
+    order_id, pi_id = charge()
+    said = order_says(orders_api, order_id, "paid")
+    event_id = deliver(api, "payment_intent.succeeded", pi_id)
+
+    assert work(api, engine) >= 1
+    sent = said.calls.last.request
+    assert sent.headers["Authorization"] == "Bearer payments-service-token"
+    assert json.loads(sent.content) == {
+        "payment_intent_id": pi_id,
+        "outcome": "succeeded",
+        "event_key": event_id,
+    }
+    assert ledger_of(engine, order_id) == {("platform", "sale", 250), ("seller", "sale", 2250)}
+    assert event_row(engine, event_id).applied_at is not None
+
+
+@pytest.mark.parametrize("status", ["refunded", "failed"])
+def test_a_success_orders_cannot_honour_is_refunded_in_full(
+    api, engine, stripe_api, orders_api, charge, status
+):
+    order_id, pi_id = charge()
+    order_says(orders_api, order_id, status)
+    refund = stripe_api.post("/v1/refunds").mock(
+        return_value=httpx.Response(
+            200, json={"id": "re_1", "object": "refund", "status": "succeeded"}
+        )
+    )
+    deliver(api, "payment_intent.succeeded", pi_id)
+    work(api, engine)
+
+    form = body_of(refund.calls.last.request)
+    assert form["payment_intent"] == pi_id
+    assert form["reverse_transfer"] == "true" and form["refund_application_fee"] == "true"
+    assert refund.calls.last.request.headers["Idempotency-Key"] == f"refund-{order_id}"
+    entries = entries_for(engine, order_id)
+    assert len(entries) == 4 and sum(e.amount_cents for e in entries) == 0
+
+
+def test_a_declined_payment_fails_the_order_and_cancels_the_intent(
+    api, engine, stripe_api, orders_api, charge
+):
+    order_id, pi_id = charge()
+    said = order_says(orders_api, order_id, "failed")
+    cancel = stripe_api.post(f"/v1/payment_intents/{pi_id}/cancel").mock(
+        return_value=httpx.Response(200, json=payment_intent_json(pi_id, status="canceled"))
+    )
+    deliver(api, "payment_intent.payment_failed", pi_id)
+    work(api, engine)
+
+    assert json.loads(said.calls.last.request.content)["outcome"] == "failed"
+    assert cancel.called
+    assert ledger_of(engine, order_id) == set()
+
+
+@pytest.mark.parametrize("answer", [404, 503])
+def test_an_event_orders_cannot_take_yet_is_kept_and_retried(
+    api, engine, orders_api, charge, answer
+):
+    order_id, pi_id = charge()
+    route = orders_api.post(f"{ORDERS}/orders/{order_id}/payment-result").mock(
+        return_value=httpx.Response(answer, json={"error": "x", "message": "x"})
+    )
+    event_id = deliver(api, "payment_intent.succeeded", pi_id)
+    work(api, engine)
+
+    row = event_row(engine, event_id)
+    assert row.applied_at is None and row.attempts == 1 and row.next_attempt_at is not None
+    work(api, engine)  # not due yet: backoff
+    assert route.call_count == 1
+
+    order_says(orders_api, order_id, "paid")
+    with engine.begin() as conn:
+        conn.execute(
+            payment_event.update()
+            .where(payment_event.c.stripe_event_id == event_id)
+            .values(next_attempt_at=None)
+        )
+    work(api, engine)
+    assert event_row(engine, event_id).applied_at is not None
+    assert len(entries_for(engine, order_id)) == 2
+
+
+def test_the_same_outcome_twice_writes_the_sale_once(api, engine, orders_api, charge):
+    order_id, pi_id = charge()
+    order_says(orders_api, order_id, "paid")
+    for _ in range(2):
+        deliver(api, "payment_intent.succeeded", pi_id)
+    work(api, engine)
+    assert len(entries_for(engine, order_id)) == 2
+
+
+def test_an_event_for_a_payment_intent_payments_did_not_create_is_set_aside(
+    api, engine, orders_api
+):
+    route = orders_api.post(url__regex=rf"{ORDERS}/orders/.*")
+    event_id = deliver(api, "payment_intent.succeeded", f"pi_{uuid.uuid4().hex[:16]}")
+    work(api, engine)
+    assert event_row(engine, event_id).applied_at is not None
+    assert not route.called
+
+
+def test_reconciliation_finds_a_payment_the_forwarder_missed(
+    api, engine, stripe_api, orders_api, charge
+):
+    order_id, pi_id = charge()
+    order_says(orders_api, order_id, "paid")
+    stripe_api.get(f"/v1/payment_intents/{pi_id}").mock(
+        return_value=httpx.Response(200, json=payment_intent_json(pi_id, status="succeeded"))
+    )
+    charges = api.app.state.charges
+
+    assert reconcile_payments(engine, charges, pending_after_seconds=3600) == 0  # too recent
+    assert reconcile_payments(engine, charges, pending_after_seconds=0) >= 1
+    key = f"recon:{pi_id}:succeeded"
+    assert inbox_count(engine, stripe_event_id=key, source="reconciliation") == 1
+    reconcile_payments(engine, charges, pending_after_seconds=0)
+    assert inbox_count(engine, stripe_event_id=key) == 1  # the key deduplicates
+
+    work(api, engine)
+    assert ledger_of(engine, order_id) == {("platform", "sale", 250), ("seller", "sale", 2250)}
+    # Settled: reconciliation no longer asks Stripe about it.
+    stripe_api.get(f"/v1/payment_intents/{pi_id}").mock(side_effect=AssertionError("asked"))
+    reconcile_payments(engine, charges, pending_after_seconds=0)
+
+
+def test_the_seller_reads_their_ledger_and_a_stranger_does_not(
+    api, engine, orders_api, charge, ready_seller, make_token, buyer
+):
+    order_id, pi_id = charge()
+    order_says(orders_api, order_id, "paid")
+    deliver(api, "payment_intent.succeeded", pi_id)
+    work(api, engine)
+    seller = {
+        "Authorization": "Bearer " + make_token(sub=str(ready_seller[0]), aud="payments", azp="bff")
+    }
+    assert len(api.get(f"/orders/{order_id}/ledger", headers=seller).json()) == 2
+    assert api.get(f"/orders/{order_id}/ledger", headers=buyer).status_code == 404
