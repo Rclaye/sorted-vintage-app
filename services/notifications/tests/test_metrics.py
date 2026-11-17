@@ -28,3 +28,9 @@ def test_unknown_paths_do_not_create_new_label_values(client, make_token):
 def test_server_errors_are_counted(client, make_token):
     client.get("/boom", headers=bearer(make_token()))
     assert 'status="500"' in metrics_text(client)
+
+
+def test_email_sends_are_counted_on_metrics(client):
+    client.app.state.consumer.on_send("item_sold_seller", "sent")
+    body = client.get("/metrics").text
+    assert 'notifications_emails_total{result="sent",template="item_sold_seller"} 1.0' in body

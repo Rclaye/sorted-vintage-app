@@ -7,3 +7,9 @@ opentelemetry-sdk
 opentelemetry-exporter-otlp-proto-http
 opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-httpx
+# Notifications (Ticket 3.6): its Notification table and migrations, and the consumer on
+# notifications.orders (research R8, R9); the same libraries and pins as Orders
+sqlalchemy
+psycopg[binary]
+alembic
+aio-pika
