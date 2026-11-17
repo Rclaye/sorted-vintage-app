@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import functools
 import json
+import unittest.mock
 import uuid
 from datetime import UTC, datetime
 
@@ -234,6 +235,46 @@ async def test_a_missing_queue_is_retried_not_fatal(amqp_url):
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await asyncio.wait_for(task, 15)
+
+
+@bounded
+async def test_a_lost_connection_is_reconnected_and_consuming_resumes(amqp_url, broker):
+    import aio_pika
+
+    mailer = Mailer()
+    consumer = Consumer(mailer=mailer, users=Users(), store=MemoryStore())
+    connections = []
+    real_connect = aio_pika.connect
+
+    async def watched(*args, **kwargs):
+        connection = await real_connect(*args, **kwargs)
+        connections.append(connection)
+        return connection
+
+    task = asyncio.create_task(
+        consumer_module.run_forever(consumer, amqp_url, broker["queue"], 10, retry_seconds=0.1)
+    )
+    try:
+        with unittest.mock.patch("aio_pika.connect", watched):
+            await until(lambda: _ready(connections))
+            await connections[0].close()  # as if the broker dropped it
+            await until(lambda: _ready(connections, 2))
+        await publish(broker, envelope("order.refunded", "refunded"))
+
+        async def sent():
+            return len(mailer.sent) == 1
+
+        await until(sent)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(task, 15)
+    assert all(c.is_closed for c in connections)
+
+
+async def _ready(connections, count=1):
+    await asyncio.sleep(0.2)  # long enough for the consumer to start on the newest one
+    return len(connections) >= count and not connections[-1].is_closed
 
 
 @bounded

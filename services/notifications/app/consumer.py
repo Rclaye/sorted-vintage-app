@@ -266,8 +266,12 @@ async def run_forever(
     retry_seconds: float = 5.0,
 ) -> None:
     """Consumes until cancelled. The queue is declared by the Messaging Topology Operator (T070);
-    this only checks it is there. Once connected, the robust connection reconnects and resumes
-    consuming on its own; a failure to connect or to find the queue is retried here."""
+    this only checks it is there. A failure to connect or to find the queue, and a lost
+    connection, are retried here after `retry_seconds`.
+
+    A plain connection, not aio-pika's robust one: the robust connection keeps its own reconnect
+    tasks, and when closing it ran out of time those tasks outlived the consumer and held the
+    event loop open at shutdown (app main builds, 2026-11-17). Here every task is ours."""
     import aio_pika
 
     while True:
@@ -276,14 +280,15 @@ async def run_forever(
         on_message = _dispatcher(consumer, tracer, running)
         try:
             connection = await asyncio.wait_for(
-                aio_pika.connect_robust(amqp_url, timeout=CONNECT_TIMEOUT), CONNECT_TIMEOUT
+                aio_pika.connect(amqp_url, timeout=CONNECT_TIMEOUT), CONNECT_TIMEOUT
             )
             channel = await connection.channel()
             await channel.set_qos(prefetch_count=prefetch)
             queue = await channel.get_queue(queue_name, ensure=True)
             await queue.consume(on_message)
             log.info("consuming", extra={"queue": queue_name})
-            await asyncio.Future()  # until cancelled
+            await connection.closed()  # until the broker goes away, or cancelled
+            log.warning("connection to RabbitMQ lost; reconnecting", extra={"queue": queue_name})
         except asyncio.CancelledError:
             raise
         except Exception:
