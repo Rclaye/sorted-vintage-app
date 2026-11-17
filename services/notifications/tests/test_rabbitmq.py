@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import functools
 import json
 import uuid
 from datetime import UTC, datetime
@@ -17,6 +18,18 @@ from app.store import MemoryStore
 
 TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
 TRACEPARENT = f"00-{TRACE_ID}-b7ad6b7169203331-01"
+
+
+def bounded(test):
+    """A broker that stops answering fails the test within a minute instead of hanging CI (seen
+    once on app main, 2026-11-17: the job sat in this module for 12 minutes)."""
+
+    @functools.wraps(test)
+    async def run(*args, **kwargs):
+        async with asyncio.timeout(60):
+            return await test(*args, **kwargs)
+
+    return run
 
 
 @pytest.fixture(scope="module")
@@ -45,7 +58,7 @@ async def broker(amqp_url):
     """The T070 topology (services/orders/base/messaging.yaml in gitops), fresh for each test."""
     import aio_pika
 
-    connection = await aio_pika.connect(amqp_url)
+    connection = await asyncio.wait_for(aio_pika.connect(amqp_url, timeout=15), 15)
     channel = await connection.channel()
     suffix = uuid.uuid4().hex[:8]
     orders = await channel.declare_exchange(
@@ -68,7 +81,8 @@ async def broker(amqp_url):
         await queue.bind(orders, routing_key=key)
     await dead.bind(dlx)
     yield {"exchange": orders, "queue": queue.name, "dead": dead}
-    await connection.close()
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(connection.close(), 5)
 
 
 class Mailer:
@@ -128,7 +142,7 @@ async def consuming(consumer, amqp_url, queue, tracer=None):
     finally:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await task
+            await asyncio.wait_for(task, 15)
 
 
 async def until(condition, seconds=20.0):
@@ -139,6 +153,7 @@ async def until(condition, seconds=20.0):
     raise AssertionError("condition not met in time")
 
 
+@bounded
 async def test_order_paid_sends_two_emails_once_under_the_publishers_trace(amqp_url, broker):
     spans = InMemorySpanExporter()
     provider = TracerProvider()
@@ -164,6 +179,7 @@ async def test_order_paid_sends_two_emails_once_under_the_publishers_trace(amqp_
     assert span.attributes["notifications.outcome"] == "ack"
 
 
+@bounded
 async def test_a_message_that_fails_five_times_is_dead_lettered(amqp_url, broker, monkeypatch):
     monkeypatch.setattr(consumer_module, "backoff_seconds", lambda headers: 0)
     store = MemoryStore()
@@ -187,6 +203,7 @@ async def test_a_message_that_fails_five_times_is_dead_lettered(amqp_url, broker
     assert message.headers["x-first-death-reason"] == "rejected"
 
 
+@bounded
 async def test_a_broken_message_goes_straight_to_the_dead_queue(amqp_url, broker):
     import aio_pika
 
@@ -206,6 +223,7 @@ async def test_a_broken_message_goes_straight_to_the_dead_queue(amqp_url, broker
     assert mailer.sent == []
 
 
+@bounded
 async def test_a_missing_queue_is_retried_not_fatal(amqp_url):
     consumer = Consumer(mailer=Mailer(), users=Users(), store=MemoryStore())
     task = asyncio.create_task(
@@ -215,4 +233,19 @@ async def test_a_missing_queue_is_retried_not_fatal(amqp_url):
     assert not task.done()
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, 15)
+
+
+@bounded
+async def test_an_unreachable_broker_is_retried_and_shutdown_is_prompt():
+    consumer = Consumer(mailer=Mailer(), users=Users(), store=MemoryStore())
+    task = asyncio.create_task(
+        consumer_module.run_forever(
+            consumer, "amqp://guest:guest@127.0.0.1:1/", "q", 1, retry_seconds=0.05
+        )
+    )
+    await asyncio.sleep(0.5)
+    assert not task.done()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(task, 5)
