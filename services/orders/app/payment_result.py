@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from app import store
 from app.clients import RefusedError, UnavailableError
 from app.errors import ApiError
+from app.telemetry import tag_order
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,6 +31,7 @@ class PaymentResult(BaseModel):
 
 @router.post("/orders/{order_id}/payment-result")
 def payment_result(order_id: uuid.UUID, body: PaymentResult, request: Request) -> dict:
+    tag_order(order_id)
     app = request.app.state
     engine, settings = app.engine, app.settings
     if request.state.claims.get("azp") != settings.payments_azp:

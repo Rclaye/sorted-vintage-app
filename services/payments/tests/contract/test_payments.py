@@ -507,3 +507,12 @@ def test_the_seller_reads_their_ledger_and_a_stranger_does_not(
     }
     assert len(api.get(f"/orders/{order_id}/ledger", headers=seller).json()) == 2
     assert api.get(f"/orders/{order_id}/ledger", headers=buyer).status_code == 404
+
+
+def test_the_worker_tells_orders_which_order_it_is_reporting(api, engine, orders_api, charge):
+    """T083: the inbox worker's call to Orders carries the order id as W3C baggage."""
+    order_id, pi_id = charge()
+    said = order_says(orders_api, order_id, "paid")
+    deliver(api, "payment_intent.succeeded", pi_id)
+    work(api, engine)
+    assert f"order_id={order_id}" in said.calls.last.request.headers["baggage"]

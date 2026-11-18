@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app import store
 from app.clients import RefusedError, UnavailableError
 from app.errors import ApiError
+from app.telemetry import tag_order
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -47,9 +48,11 @@ def create_order(
     buyer = caller_sub(request)
     key = idempotency_key.strip()
     order_id = uuid.uuid4()
+    tag_order(order_id)
 
     earlier = store.claim_key(engine, buyer, key, order_id)
     if earlier is not None:
+        tag_order(earlier.order_id)
         return _replay(engine, earlier.order_id)
 
     try:
@@ -142,6 +145,7 @@ def list_orders(request: Request) -> list[dict]:
 
 @router.get("/orders/{order_id}")
 def get_order(order_id: uuid.UUID, request: Request) -> dict:
+    tag_order(order_id)
     row = store.find(request.app.state.engine, order_id)
     if row is None or caller_sub(request) not in (row.buyer_sub, row.seller_sub):
         raise ApiError(404, "not_found", "No such order.")

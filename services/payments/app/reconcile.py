@@ -21,6 +21,7 @@ from sqlalchemy import Engine, select
 from app import accounts
 from app.db import payment_intent
 from app.stripe_api import StripeCharges, StripeConnect
+from app.telemetry import order_scope
 
 log = logging.getLogger(__name__)
 
@@ -69,50 +70,52 @@ def reconcile_payments(engine: Engine, charges: StripeCharges, pending_after_sec
     with engine.connect() as conn:
         open_intents = list(
             conn.execute(
-                select(payment_intent.c.payment_intent_id).where(
+                select(payment_intent.c.payment_intent_id, payment_intent.c.order_id).where(
                     payment_intent.c.settled_at.is_(None),
                     payment_intent.c.created_at < now - timedelta(seconds=pending_after_seconds),
                     payment_intent.c.created_at > now - _GIVE_UP_AFTER,
                 )
-            ).scalars()
+            )
         )
     stored = 0
-    for payment_intent_id in open_intents:
-        try:
-            intent = charges.retrieve_intent(payment_intent_id)
-        except Exception:
-            log.warning(
-                "could not read a PaymentIntent",
-                extra={"payment_intent": payment_intent_id},
-                exc_info=True,
-            )
-            continue
-        status, event_type = intent.status, _EVENT_FOR.get(intent.status)
-        if (
-            event_type is None
-            and intent.status == "requires_payment_method"
-            and intent.failure_code
-        ):
-            status, event_type = "payment_failed", "payment_intent.payment_failed"
-        if event_type is None:
-            continue
-        key = f"recon:{payment_intent_id}:{status}"
-        payload = {
-            "id": key,
-            "type": event_type,
-            "data": {
-                "object": {
-                    "id": payment_intent_id,
-                    "status": intent.status,
-                    "last_payment_error": {"code": intent.failure_code},
-                }
-            },
-        }
-        if store(engine, key, event_type, "reconciliation", payload, payment_intent_id):
-            stored += 1
+    for payment_intent_id, order_id in open_intents:
+        # Each PaymentIntent's Stripe read and log lines carry its order (T083).
+        with order_scope(order_id):
+            stored += _reconcile_one(engine, charges, payment_intent_id, store)
     if stored:
         log.info("payment reconciliation stored outcomes", extra={"count": stored})
     return stored
+
+
+def _reconcile_one(engine: Engine, charges: StripeCharges, payment_intent_id: str, store) -> int:
+    """Stores a PaymentIntent's outcome once it has one; 1 if newly stored."""
+    try:
+        intent = charges.retrieve_intent(payment_intent_id)
+    except Exception:
+        log.warning(
+            "could not read a PaymentIntent",
+            extra={"payment_intent": payment_intent_id},
+            exc_info=True,
+        )
+        return 0
+    status, event_type = intent.status, _EVENT_FOR.get(intent.status)
+    if event_type is None and intent.status == "requires_payment_method" and intent.failure_code:
+        status, event_type = "payment_failed", "payment_intent.payment_failed"
+    if event_type is None:
+        return 0
+    key = f"recon:{payment_intent_id}:{status}"
+    payload = {
+        "id": key,
+        "type": event_type,
+        "data": {
+            "object": {
+                "id": payment_intent_id,
+                "status": intent.status,
+                "last_payment_error": {"code": intent.failure_code},
+            }
+        },
+    }
+    return 1 if store(engine, key, event_type, "reconciliation", payload, payment_intent_id) else 0
 
 
 async def run_forever(

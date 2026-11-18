@@ -7,6 +7,8 @@ from prometheus_client import CollectorRegistry, Histogram
 from starlette.routing import Match
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.telemetry import tag_from_baggage, tag_scope
+
 log = logging.getLogger("app.request")
 
 BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
@@ -57,18 +59,22 @@ class MetricsMiddleware:
                 status = message["status"]
             await send(message)
 
-        try:
-            await self.app(scope, receive, send_wrapper)
-        finally:
-            elapsed = time.perf_counter() - start
-            route = _route_template(scope)
-            self.histogram.labels(scope["method"], route, str(status)).observe(elapsed)
-            log.info(
-                "request",
-                extra={
-                    "method": scope["method"],
-                    "route": route,
-                    "status": status,
-                    "duration_ms": round(elapsed * 1000, 2),
-                },
-            )
+        # Each request starts untagged; an order_id arriving in W3C baggage tags it (T083), and the
+        # access line below carries whatever the route tagged.
+        with tag_scope():
+            tag_from_baggage()
+            try:
+                await self.app(scope, receive, send_wrapper)
+            finally:
+                elapsed = time.perf_counter() - start
+                route = _route_template(scope)
+                self.histogram.labels(scope["method"], route, str(status)).observe(elapsed)
+                log.info(
+                    "request",
+                    extra={
+                        "method": scope["method"],
+                        "route": route,
+                        "status": status,
+                        "duration_ms": round(elapsed * 1000, 2),
+                    },
+                )

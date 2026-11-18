@@ -17,6 +17,7 @@ from sqlalchemy import Engine, select
 from app import store
 from app.clients import Listings, Payments, RefusedError, UnavailableError
 from app.db import orders
+from app.telemetry import order_scope
 
 log = logging.getLogger(__name__)
 BATCH = 50
@@ -39,22 +40,29 @@ def expire_due(engine: Engine, listings: Listings, payments: Payments, env: str)
         )
     done = 0
     for row in due:
-        context = {"order_id": str(row.id)}
-        try:
-            listings.release(row.reservation_id)
-            if row.payment_intent_id:
-                payments.cancel_intent(row.payment_intent_id)
-        except (UnavailableError, RefusedError) as exc:
-            log.warning("expiry deferred", extra={**context, "reason": str(exc)})
-            continue
-        if row.payment_intent_id:
-            store.mark_expired(engine, row.id)
-            log.info("order expired; waiting for Payments to confirm the cancel", extra=context)
-        else:
-            store.close(engine, row.id, "failed", env, failure_reason="reservation_expired")
-            log.info("order expired before a PaymentIntent existed", extra=context)
-        done += 1
+        # Each order's calls and log lines carry its id, and nothing carries over (T083).
+        with order_scope(row.id):
+            done += _expire(engine, listings, payments, env, row)
     return done
+
+
+def _expire(engine: Engine, listings: Listings, payments: Payments, env: str, row) -> int:
+    """Release, cancel, then mark; 1 if dealt with, 0 if it waits for the next pass."""
+    context = {"order_id": str(row.id)}
+    try:
+        listings.release(row.reservation_id)
+        if row.payment_intent_id:
+            payments.cancel_intent(row.payment_intent_id)
+    except (UnavailableError, RefusedError) as exc:
+        log.warning("expiry deferred", extra={**context, "reason": str(exc)})
+        return 0
+    if row.payment_intent_id:
+        store.mark_expired(engine, row.id)
+        log.info("order expired; waiting for Payments to confirm the cancel", extra=context)
+    else:
+        store.close(engine, row.id, "failed", env, failure_reason="reservation_expired")
+        log.info("order expired before a PaymentIntent existed", extra=context)
+    return 1
 
 
 async def run_forever(

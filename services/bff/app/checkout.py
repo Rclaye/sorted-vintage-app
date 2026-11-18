@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from app.pages import MESSAGES, SignedIn, back, render, services
 from app.services import ServiceDownError
 from app.signin import check_csrf
+from app.telemetry import tag_order
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -144,6 +145,7 @@ async def checkout(listing_id: str, request: Request, session: SignedIn) -> Resp
         # A replay of an order that is already over: show it as it is.
         return RedirectResponse(f"/orders/{order.get('id')}", status_code=303)
 
+    tag_order(order["id"])
     log.info("checkout started", extra={"order_id": order["id"], "listing_id": str(listing)})
     base = request.app.state.settings.public_base_url
     response = await render(
@@ -166,6 +168,7 @@ async def order_page(order_id: str, request: Request, session: SignedIn) -> HTML
     order_uuid = _uuid(order_id)
     if order_uuid is None:
         return await render(request, "missing.html", status=404, what="order")
+    tag_order(order_uuid)
     s = services(request)
     answer = await s.call("GET", f"{s.orders}/orders/{order_uuid}", token=session.access_token)
     if not answer.ok or not isinstance(answer.body, dict):

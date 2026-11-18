@@ -25,6 +25,7 @@ from app.charges import find_by_intent
 from app.db import payment_event, payment_intent
 from app.orders_client import Orders, OrdersUnavailableError
 from app.stripe_api import ProviderRejectedError, ProviderUnavailableError, StripeCharges
+from app.telemetry import order_scope, tag_order
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +100,7 @@ def apply(engine: Engine, orders: Orders, charges: StripeCharges, event) -> str:
     if known is None:
         # Not created through POST /payment-intents (a spike, the Dashboard): nothing to tell.
         return "not_ours"
+    tag_order(known.order_id)
     context = {"order_id": str(known.order_id), "event_id": event.stripe_event_id}
 
     try:
@@ -168,26 +170,33 @@ def run_once(engine: Engine, orders: Orders, charges: StripeCharges) -> int:
     """One pass over the events that are due; returns how many were applied."""
     applied = 0
     for event in due(engine):
-        context = {"event_id": event.stripe_event_id, "type": event.type}
-        try:
-            done = apply(engine, orders, charges, event)
-        except NotYetError as exc:
-            wait = backoff_seconds(event.attempts)
-            _mark(
-                engine,
-                event.stripe_event_id,
-                attempts=event.attempts + 1,
-                next_attempt_at=datetime.now(UTC) + timedelta(seconds=wait),
-            )
-            log.warning(
-                "payment event not applied yet",
-                extra={**context, "reason": str(exc), "retry_in": wait},
-            )
-            continue
-        _mark(engine, event.stripe_event_id, applied_at=datetime.now(UTC))
-        log.info("payment event applied", extra={**context, "result": done})
-        applied += 1
+        # Untagged until apply finds the order; nothing carries over to the next event (T083).
+        with order_scope():
+            applied += _apply_one(engine, orders, charges, event)
     return applied
+
+
+def _apply_one(engine: Engine, orders: Orders, charges: StripeCharges, event) -> int:
+    """Applies one event and records the outcome; 1 if applied, 0 if it is retried later."""
+    context = {"event_id": event.stripe_event_id, "type": event.type}
+    try:
+        done = apply(engine, orders, charges, event)
+    except NotYetError as exc:
+        wait = backoff_seconds(event.attempts)
+        _mark(
+            engine,
+            event.stripe_event_id,
+            attempts=event.attempts + 1,
+            next_attempt_at=datetime.now(UTC) + timedelta(seconds=wait),
+        )
+        log.warning(
+            "payment event not applied yet",
+            extra={**context, "reason": str(exc), "retry_in": wait},
+        )
+        return 0
+    _mark(engine, event.stripe_event_id, applied_at=datetime.now(UTC))
+    log.info("payment event applied", extra={**context, "result": done})
+    return 1
 
 
 async def run_forever(

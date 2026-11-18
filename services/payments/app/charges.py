@@ -22,6 +22,7 @@ from app.db import payment_intent
 from app.errors import ApiError
 from app.ledger import platform_fee
 from app.stripe_api import ProviderRejectedError, ProviderUnavailableError
+from app.telemetry import tag_order
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -65,6 +66,7 @@ def find_by_intent(engine: Engine, payment_intent_id: str):
 @router.post("/payment-intents", status_code=201)
 def create_payment_intent(body: IntentRequest, request: Request) -> JSONResponse:
     require_orders(request)
+    tag_order(body.order_id)
     app = request.app.state
     seller = accounts.find(app.engine, body.seller_sub)
     ready = seller is not None and (
@@ -104,6 +106,9 @@ def cancel_payment_intent(payment_intent_id: str, request: Request) -> dict:
     """200 whether this call cancelled it or it was already final; `canceled` says which, so a
     PaymentIntent that had already succeeded is not mistaken for a cancelled one."""
     require_orders(request)
+    known = find_by_intent(request.app.state.engine, payment_intent_id)
+    if known is not None:
+        tag_order(known.order_id)
     context = {"payment_intent": payment_intent_id}
     try:
         canceled = request.app.state.charges.cancel_intent(payment_intent_id)
