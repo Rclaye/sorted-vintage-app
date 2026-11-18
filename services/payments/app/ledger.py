@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.db import ledger_entry, payment_intent
 from app.errors import ApiError
+from app.telemetry import tag_order
 
 router = APIRouter()
 
@@ -103,6 +104,7 @@ def entries_for(engine: Engine, order_id: uuid.UUID) -> list:
 
 @router.get("/orders/{order_id}/ledger")
 def get_ledger(order_id: uuid.UUID, request: Request) -> list[dict]:
+    tag_order(order_id)
     """For Orders (which checks its own buyer and seller before asking) and for the seller."""
     engine, settings = request.app.state.engine, request.app.state.settings
     claims = request.state.claims

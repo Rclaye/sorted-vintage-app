@@ -84,6 +84,8 @@ async def relay_once(engine: Engine, publish: Publish, tracer: trace.Tracer | No
                 "messaging.destination.name": EXCHANGE,
                 "messaging.rabbitmq.destination.routing_key": row.event_type,
                 "messaging.message.id": str(row.id),
+                # T083: the order this event is about.
+                "order_id": str((row.payload.get("order") or {}).get("id", "")),
             },
         ):
             await publish(message_for(row), row.event_type)

@@ -250,3 +250,25 @@ async def test_different_events_do_not_wait_for_each_other():
     assert await asyncio.wait_for(deliver(consumer, free), 2) == "ack"
     gate.set()
     assert await first == "ack"
+
+
+async def test_each_message_span_carries_its_order_and_the_next_starts_clean():
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from app.telemetry import current_tags
+
+    spans = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(spans))
+    consumer = Consumer(mailer=Mailer(), users=Users())
+    data, body = message()
+
+    assert await process(consumer, FakeMessage(body, "order.paid", {}), provider.get_tracer("t"))
+    assert await process(consumer, FakeMessage(b"{", "order.paid", {}), provider.get_tracer("t"))
+
+    first, second = spans.get_finished_spans()
+    assert first.attributes["order_id"] == data["order"]["id"]
+    assert "order_id" not in second.attributes
+    assert current_tags() == {}

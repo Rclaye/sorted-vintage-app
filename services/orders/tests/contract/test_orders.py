@@ -559,3 +559,12 @@ async def test_the_relay_publishes_to_rabbitmq_with_confirms(
     assert message.headers["traceparent"].split("-")[1] == row.traceparent.split("-")[1]
     assert outbox(engine, order["id"])[0].published_at is not None
     await setup.close()
+
+
+def test_checkout_passes_the_order_on_to_listings_and_payments(api, person, happy_path):
+    """T083: the order id travels as W3C baggage to the services Orders calls."""
+    _, buyer = person()
+    order = checkout(api, buyer, happy_path["listing_id"]).json()
+
+    for route in (happy_path["reserve"], happy_path["intent"]):
+        assert f"order_id={order['id']}" in route.calls.last.request.headers["baggage"]

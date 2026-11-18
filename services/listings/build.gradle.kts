@@ -28,6 +28,11 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-flyway")
     implementation("org.flywaydb:flyway-database-postgresql")
     implementation("io.micrometer:micrometer-registry-prometheus")
+    // T083: order_id from W3C baggage onto the span (OrderIdFilter). The API only; the Java agent
+    // (2.33.1, Dockerfile) supplies the implementation at runtime. The version is Spring Boot's
+    // managed one (1.62.0 with Boot 4.1.2), so api and context match; the agent is built on 1.67.0
+    // and bridges any API version up to its own.
+    implementation("io.opentelemetry:opentelemetry-api")
     // Photos in Garage through its S3 API (research R19). Apache 2.0; talks only to the endpoint it is given.
     implementation(platform("software.amazon.awssdk:bom:2.46.7"))
     implementation("software.amazon.awssdk:s3")

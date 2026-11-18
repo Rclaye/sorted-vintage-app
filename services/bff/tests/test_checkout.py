@@ -332,3 +332,12 @@ async def test_an_unknown_service_url_is_named_generically():
     with pytest.raises(ServiceDownError) as raised:
         await s.call("GET", "http://elsewhere/x")
     assert raised.value.service == "A service"
+
+
+def test_the_order_page_passes_the_order_on_to_orders_and_its_logs(web, fake, buyer, caplog):  # noqa: F811
+    route = fake.get(f"{ORDERS}/orders/{ORDER_ID}").mock(
+        return_value=httpx.Response(200, json=order(status="paid"))
+    )
+    caplog.set_level(logging.INFO)
+    assert web.get(f"/orders/{ORDER_ID}").status_code == 200
+    assert f"order_id={ORDER_ID}" in route.calls[0].request.headers["baggage"]

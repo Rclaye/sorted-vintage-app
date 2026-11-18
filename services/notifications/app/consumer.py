@@ -27,6 +27,7 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, ValidationError
 
 from app.store import MAX_ATTEMPTS, MemoryStore, Store
+from app.telemetry import order_scope, tag_order
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +134,7 @@ class Consumer:
             return "ack"
 
         order = message.order
+        tag_order(order.id)
         context = {
             "event_id": str(message.event_id),
             "order_id": str(order.id),
@@ -240,9 +242,11 @@ async def process(consumer: Consumer, message, tracer: trace.Tracer | None = Non
         },
     ) as span:
         try:
-            outcome = await consumer.handle(
-                body=message.body, routing_key=message.routing_key or "", headers=headers
-            )
+            # Untagged until the envelope is read; nothing carries over to the next message.
+            with order_scope():
+                outcome = await consumer.handle(
+                    body=message.body, routing_key=message.routing_key or "", headers=headers
+                )
         except Exception:
             log.exception("message handling failed; it will be delivered again")
             outcome = "requeue"
