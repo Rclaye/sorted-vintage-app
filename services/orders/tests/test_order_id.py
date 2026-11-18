@@ -92,3 +92,14 @@ def test_nothing_to_tag_is_ignored():
         tag_order(None)
         tag_order("")
         assert current_tags() == {}
+
+
+def test_baggage_that_is_not_an_order_id_is_ignored(client, log_lines, make_token):
+    add_tagging_route(client)
+    headers = {
+        "Authorization": f"Bearer {make_token()}",
+        "baggage": f"{ORDER_ID}=%3Cscript%3E,other=1",
+    }
+    assert client.get("/untagged", headers=headers).status_code == 200
+    line = next(line for line in log_lines() if line["message"] == "nothing to tag")
+    assert ORDER_ID not in line

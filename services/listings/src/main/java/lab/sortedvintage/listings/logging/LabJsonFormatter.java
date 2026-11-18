@@ -10,7 +10,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * One JSON object per line with the fields in contracts/README.md. The OpenTelemetry Java agent puts
- * trace_id and span_id in the MDC; they are empty outside a request.
+ * trace_id and span_id in the MDC; they are empty outside a request. order_id is added when the
+ * request is about an order (OrderIdFilter, T083).
  */
 public class LabJsonFormatter implements StructuredLogFormatter<ILoggingEvent> {
 
@@ -40,6 +41,10 @@ public class LabJsonFormatter implements StructuredLogFormatter<ILoggingEvent> {
         line.put("span_id", mdc.getOrDefault("span_id", ""));
         line.put("logger", event.getLoggerName());
         line.put("message", event.getFormattedMessage());
+        String orderId = mdc.get("order_id");
+        if (orderId != null) {
+            line.put("order_id", orderId);
+        }
         if (event.getThrowableProxy() != null) {
             line.put("stack_trace", ThrowableProxyUtil.asString(event.getThrowableProxy()));
         }

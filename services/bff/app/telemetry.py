@@ -9,6 +9,7 @@ one order after another wrap each in `order_scope(order_id)`, so nothing carries
 """
 
 import contextlib
+import uuid
 from collections.abc import Iterator
 from contextvars import ContextVar
 
@@ -76,10 +77,15 @@ def tag_order(order_id: object) -> None:
 
 
 def tag_from_baggage() -> None:
-    """An order_id another service passed along in W3C baggage, if any."""
+    """An order_id another service passed along in W3C baggage, if any. Browsers can send baggage
+    too, so only a UUID is taken: anything else is ignored rather than written into the logs."""
     value = baggage.get_baggage(ORDER_ID)
-    if isinstance(value, str) and value:
-        tag_order(value)
+    if not isinstance(value, str):
+        return
+    try:
+        tag_order(uuid.UUID(value))
+    except ValueError:
+        return
 
 
 @contextlib.contextmanager

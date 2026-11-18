@@ -37,6 +37,24 @@ class LabJsonFormatterTest {
     }
 
     @Test
+    void anOrderInScopeAddsItsId() throws Exception {
+        LoggingEvent event = new LoggingEvent("x", logger, Level.INFO, "reserved", null, null);
+        event.setMDCPropertyMap(Map.of("order_id", "22222222-2222-4222-8222-222222222222"));
+
+        JsonNode json = JsonMapper.builder().build().readTree(formatter.format(event));
+
+        assertThat(json.get("order_id").asText()).isEqualTo("22222222-2222-4222-8222-222222222222");
+    }
+
+    @Test
+    void noOrderNoField() throws Exception {
+        LoggingEvent event = new LoggingEvent("x", logger, Level.INFO, "browse", null, null);
+        event.setMDCPropertyMap(Map.of());
+
+        assertThat(JsonMapper.builder().build().readTree(formatter.format(event)).has("order_id")).isFalse();
+    }
+
+    @Test
     void traceFieldsAreEmptyOutsideARequest() throws Exception {
         LoggingEvent event = new LoggingEvent("x", logger, Level.WARN, "no trace", null, null);
 
