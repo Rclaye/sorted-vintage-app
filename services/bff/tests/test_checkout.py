@@ -316,3 +316,19 @@ def test_the_buyer_sees_their_orders_with_titles(web, fake, buyer):  # noqa: F81
 def test_no_orders_yet(web, fake, buyer):  # noqa: F811
     fake.get(f"{ORDERS}/orders").mock(return_value=httpx.Response(200, json=[]))
     assert "No orders yet" in web.get("/orders").text
+
+
+async def test_an_unknown_service_url_is_named_generically():
+    from app.services import ServiceDownError, Services
+
+    async def refuse(request):
+        raise httpx.ConnectError("down")
+
+    s = Services(
+        "http://listings",
+        "http://payments",
+        httpx.AsyncClient(transport=httpx.MockTransport(refuse)),
+    )
+    with pytest.raises(ServiceDownError) as raised:
+        await s.call("GET", "http://elsewhere/x")
+    assert raised.value.service == "A service"
