@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote, urlencode
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -143,6 +143,8 @@ async def item(listing_id: str, request: Request) -> HTMLResponse:
         listing=listing,
         own=own,
         published=request.query_params.get("published") == "1",
+        # T073: one key per drawing of the page, so a double click reaches the same order.
+        idempotency_key=str(uuid4()),
     )
 
 

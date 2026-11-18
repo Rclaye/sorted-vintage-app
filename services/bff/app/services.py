@@ -1,4 +1,5 @@
-"""Calls from the BFF to Listings and Payments, with the signed-in user's access token (T048).
+"""Calls from the BFF to Listings, Payments and Orders, with the signed-in user's access token
+(T048, T073).
 
 Every call returns the status and the JSON body (or the raw response for photos), so the pages
 decide what an answer means; network failures become ServiceDown, shown as a friendly 503 page.
@@ -32,16 +33,33 @@ class Answer:
 
 
 class Services:
-    def __init__(self, listings_url: str, payments_url: str, http: httpx.AsyncClient | None = None):
+    def __init__(
+        self,
+        listings_url: str,
+        payments_url: str,
+        http: httpx.AsyncClient | None = None,
+        orders_url: str = "http://orders",
+    ):
         self.listings = listings_url.rstrip("/")
         self.payments = payments_url.rstrip("/")
+        self.orders = orders_url.rstrip("/")
         self._http = http or httpx.AsyncClient(timeout=10)
+
+    def _name(self, url: str) -> str:
+        for base, name in (
+            (self.listings, "Listings"),
+            (self.orders, "Orders"),
+            (self.payments, "Payments"),
+        ):
+            if url.startswith(base + "/") or url == base:
+                return name
+        return "A service"
 
     async def call(self, method: str, url: str, token: str | None = None, **kwargs: Any) -> Answer:
         headers = kwargs.pop("headers", {})
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        service = "Listings" if url.startswith(self.listings) else "Payments"
+        service = self._name(url)
         try:
             response = await self._http.request(method, url, headers=headers, **kwargs)
         except httpx.HTTPError as exc:

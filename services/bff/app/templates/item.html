@@ -14,7 +14,16 @@
     {% if listing.description %}<p class="description">{{ listing.description }}</p>{% endif %}
     <p>Sold by <a href="/sellers/{{ listing.seller_sub }}">{{ listing.seller_display_name }}</a></p>
     {% if listing.status == 'available' and not own %}
-      <button type="button" disabled title="Checkout arrives in Sprint 3">Buy (coming soon)</button>
+      {% if session %}
+        <form method="post" action="/checkout/{{ listing.id }}">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf }}">
+          <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
+          <button type="submit" class="primary">Buy for ${{ '%.2f' | format(listing.price_cents / 100) }}</button>
+        </form>
+        <p class="hint">The item is held for you for 10 minutes while you pay.</p>
+      {% else %}
+        <a class="button primary" href="/login?next={{ ('/items/' ~ listing.id) | urlencode }}">Sign in to buy</a>
+      {% endif %}
     {% elif listing.status != 'available' %}
       <p class="badge">{{ listing.status }}</p>
     {% endif %}

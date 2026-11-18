@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Pay for {{ title }} · Sorted Vintage{% endblock %}
+{% block scripts %}
+  {# Stripe.js must load from js.stripe.com; this page alone allows it (PAY_CSP). #}
+  <script src="https://js.stripe.com/v3/" defer></script>
+  <script src="/static/checkout.js" defer></script>
+{% endblock %}
+{% block content %}
+<section class="pay">
+  <h1>Pay for {{ title }}</h1>
+  <p class="price">${{ '%.2f' | format(order.amount_cents / 100) }}</p>
+  <p class="hint">The item is held for you for 10 minutes. Card details go straight to Stripe; Sorted Vintage never sees them.</p>
+  <form id="payment-form"
+        data-publishable-key="{{ publishable_key }}"
+        data-client-secret="{{ client_secret }}"
+        data-return-url="{{ return_url }}"
+        data-order-url="/orders/{{ order.id }}">
+    <div id="payment-element"><p class="hint" id="payment-loading">Loading the payment form…</p></div>
+    <button id="pay" type="submit" class="primary" disabled>Pay ${{ '%.2f' | format(order.amount_cents / 100) }}</button>
+    <p id="payment-message" class="notice error" role="alert" hidden></p>
+  </form>
+  <p><a href="/orders/{{ order.id }}">Order details</a></p>
+</section>
+{% endblock %}

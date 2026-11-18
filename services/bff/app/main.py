@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from opentelemetry.sdk.trace import TracerProvider
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
 
-from app import pages, signin
+from app import checkout, pages, signin
 from app.auth import KeycloakKeys, KeyResolver
 from app.config import Settings
 from app.errors import error_response, install_error_handlers
@@ -57,7 +57,9 @@ def create_app(
         settings.client_secret,
         keys,
     )
-    app.state.services = services or Services(settings.listings_url, settings.payments_url)
+    app.state.services = services or Services(
+        settings.listings_url, settings.payments_url, orders_url=settings.orders_url
+    )
     install_error_handlers(app)
 
     @app.exception_handler(ServiceDownError)
@@ -76,6 +78,7 @@ def create_app(
 
     app.include_router(signin.router)
     app.include_router(pages.router)
+    app.include_router(checkout.router)
     app.mount(
         "/static",
         StaticFiles(directory=str(pages.Path(pages.__file__).parent / "static")),
