@@ -38,6 +38,10 @@ class Settings:
     # The services the pages call, in-cluster (T048).
     listings_url: str = "http://listings"
     payments_url: str = "http://payments"
+    # Checkout (T073): Orders, called with the buyer's token, and this environment's Stripe
+    # publishable key for the Payment Element (public by design, Secret stripe/publishable-key).
+    orders_url: str = "http://orders"
+    stripe_publishable_key: str = ""
 
     @property
     def realm_public_url(self) -> str:
@@ -66,6 +70,8 @@ class Settings:
         ]
         if missing:
             raise RuntimeError(f"Not set: {', '.join(missing)}. Sign-in cannot work without them.")
+        if self.stripe_publishable_key and not self.stripe_publishable_key.startswith("pk_"):
+            raise RuntimeError("STRIPE_PUBLISHABLE_KEY must be a publishable key (pk_...).")
         if len(self.session_cookie_key) < 32:
             raise RuntimeError("SESSION_COOKIE_KEY is too short: use at least 32 characters.")
 
@@ -92,4 +98,6 @@ class Settings:
             cookie_secure=env.get("COOKIE_SECURE", "true").lower() != "false",
             listings_url=env.get("LISTINGS_URL", defaults.listings_url).rstrip("/"),
             payments_url=env.get("PAYMENTS_URL", defaults.payments_url).rstrip("/"),
+            orders_url=env.get("ORDERS_URL", defaults.orders_url).rstrip("/"),
+            stripe_publishable_key=env.get("STRIPE_PUBLISHABLE_KEY", ""),
         )

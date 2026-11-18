@@ -1,0 +1,6 @@
+<div id="order-status" class="order-status status-{{ order.status }}"
+     {% if not final %}hx-get="/orders/{{ order.id }}" hx-trigger="every {{ poll_seconds }}s" hx-swap="outerHTML"{% endif %}
+     aria-live="polite">
+  <p class="badge">{{ words }}</p>
+  <p>{{ explanation }}</p>
+</div>

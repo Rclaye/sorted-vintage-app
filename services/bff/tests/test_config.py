@@ -43,3 +43,21 @@ def test_realm_urls_come_from_the_issuer_and_jwks_url(settings):
 def test_default_settings_are_not_valid_without_an_issuer():
     with pytest.raises(RuntimeError):
         Settings().validate()
+
+
+def test_a_secret_key_is_refused_where_the_publishable_key_goes(settings):
+    import dataclasses
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="publishable key"):
+        dataclasses.replace(settings, stripe_publishable_key="sk_test_wrong").validate()
+
+
+def test_checkout_settings_come_from_the_environment(monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.setenv("ORDERS_URL", "http://orders/")
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_x")
+    s = Settings.from_env()
+    assert (s.orders_url, s.stripe_publishable_key) == ("http://orders", "pk_test_x")

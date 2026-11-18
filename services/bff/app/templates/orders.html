@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Your orders · Sorted Vintage{% endblock %}
+{% block content %}
+<h1>Your orders</h1>
+{% if orders %}
+<ul class="orders">
+  {% for o in orders %}
+  <li><a href="/orders/{{ o.id }}">{{ o.title }}</a> · ${{ '%.2f' | format(o.amount_cents / 100) }} · <span class="badge">{{ o.words }}</span></li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>No orders yet. <a href="/">Browse the listings</a>.</p>
+{% endif %}
+{% endblock %}
