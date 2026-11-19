@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 VERIFY_SELLER = "verify-seller"
+# Ticket 3.8 (T075, T058): the sv-dev buyer for verify_sprint3.sh and the double-sell test. It only
+# buys, so it has no Stripe account and no listings.
+VERIFY_BUYER = "verify-buyer"
 
 
 @dataclass(frozen=True)
@@ -22,7 +25,11 @@ class Seller:
 
     @property
     def is_demo(self) -> bool:
-        return self.key != VERIFY_SELLER
+        return self.key not in (VERIFY_SELLER, VERIFY_BUYER)
+
+    @property
+    def buys_only(self) -> bool:
+        return self.key == VERIFY_BUYER
 
 
 @dataclass(frozen=True)
@@ -67,6 +74,16 @@ def with_verify_seller(sellers: tuple[Seller, ...], verify_dir: str) -> tuple[Se
     return (*sellers, Seller(VERIFY_SELLER, email, "", password))
 
 
+def with_verify_buyer(users: tuple[Seller, ...], buyer_dir: str) -> tuple[Seller, ...]:
+    """Add the verify buyer from Secret verify-buyer (Terraform), when it is mounted."""
+    folder = Path(buyer_dir)
+    if any(s.key == VERIFY_BUYER for s in users) or not (folder / "password").is_file():
+        return users
+    email = (folder / "username").read_text().strip()
+    password = (folder / "password").read_text().strip()
+    return (*users, Seller(VERIFY_BUYER, email, "", password))
+
+
 def from_env(env: dict[str, str] | None = None) -> Settings:
     env = dict(os.environ if env is None else env)
     sellers = load_sellers(env.get("SELLERS_FILE", "/etc/seed/sellers/sellers.json"))
@@ -81,5 +98,8 @@ def from_env(env: dict[str, str] | None = None) -> Settings:
         traefik_host=env.get("TRAEFIK_HOST", "traefik.traefik.svc.cluster.local"),
         tls_cert_file=env.get("TLS_CERT_FILE", "/etc/seed/tls/tls.crt"),
         listings_total=int(env.get("LISTINGS_TOTAL", "50")),
-        sellers=with_verify_seller(sellers, env.get("VERIFY_DIR", "/etc/seed/verify")),
+        sellers=with_verify_buyer(
+            with_verify_seller(sellers, env.get("VERIFY_DIR", "/etc/seed/verify")),
+            env.get("BUYER_DIR", "/etc/seed/buyer"),
+        ),
     )

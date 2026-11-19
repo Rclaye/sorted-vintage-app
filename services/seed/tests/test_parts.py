@@ -122,3 +122,41 @@ def test_verify_seller_comes_from_its_own_secret_until_listed(tmp_path):
     sellers.write_text(json.dumps(listed))
     s = from_env(env)
     assert [x.stripe_account_id for x in s.sellers] == ["acct_1", "acct_2"]
+
+
+def test_verify_buyer_comes_from_its_own_secret_and_only_buys(tmp_path):
+    import json
+
+    from app.config import from_env
+
+    sellers = tmp_path / "sellers.json"
+    sellers.write_text(json.dumps([]))
+    buyer = tmp_path / "buyer"
+    buyer.mkdir()
+    (buyer / "username").write_text("verify-buyer@sortedvtg.lan\n")
+    (buyer / "password").write_text("bpw")
+    env = {"KEYCLOAK_CLIENT_SECRET": "x", "SELLERS_FILE": str(sellers), "BUYER_DIR": str(buyer)}
+    s = from_env(env)
+    (b,) = s.sellers
+    assert (b.key, b.email, b.stripe_account_id, b.password) == (
+        "verify-buyer",
+        "verify-buyer@sortedvtg.lan",
+        "",
+        "bpw",
+    )
+    assert b.buys_only and not b.is_demo
+
+
+def test_without_its_secret_there_is_no_verify_buyer(tmp_path):
+    import json
+
+    from app.config import from_env
+
+    sellers = tmp_path / "sellers.json"
+    sellers.write_text(json.dumps([]))
+    env = {
+        "KEYCLOAK_CLIENT_SECRET": "x",
+        "SELLERS_FILE": str(sellers),
+        "BUYER_DIR": str(tmp_path / "none"),
+    }
+    assert from_env(env).sellers == ()

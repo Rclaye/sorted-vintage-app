@@ -58,6 +58,8 @@ def run(
         subs[seller.key] = kc.ensure_user(seller, token)
         if seller.stripe_account_id:
             link(settings, http, token, subs[seller.key], seller, log)
+        elif seller.buys_only:
+            log(f"{seller.key}: a buyer, so no Stripe account")
         else:
             log(f"{seller.key}: no Stripe account yet; onboard it by hand, then add its id")
 
@@ -110,7 +112,7 @@ def main() -> int:
         say(f"FAIL: {exc}")
         return 1
     total = sum(created.values())
-    say(f"PASS: {len(settings.sellers)} sellers ready, {total} listings created this run")
+    say(f"PASS: {len(settings.sellers)} users ready, {total} listings created this run")
     return 0
 
 

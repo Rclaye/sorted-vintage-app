@@ -174,3 +174,16 @@ def test_a_seller_without_an_account_is_created_but_not_linked():
     go(s, [])
     assert "verify-seller" in world["created"]
     assert world["links"].call_count == 2
+
+
+def test_the_verify_buyer_is_created_with_no_link_and_no_listings():
+    with respx.mock(assert_all_called=False) as mock:
+        world = fake_world(mock)
+        buyer = Seller("verify-buyer", "verify-buyer@sortedvtg.lan", "", "bpw")
+        s = settings()
+        s = Settings(**{**s.__dict__, "sellers": (*s.sellers, buyer)})
+        lines: list[str] = []
+        run(s, httpx.Client(), lambda: httpx.Client(), lines.append)
+    assert "verify-buyer" in world["created"]
+    assert "verify-buyer: a buyer, so no Stripe account" in lines
+    assert not any("listings/sellers" in line and "verify-buyer" in line for line in lines)
