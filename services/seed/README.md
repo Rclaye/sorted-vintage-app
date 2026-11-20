@@ -2,6 +2,9 @@
 
 Fills `sv-dev` with demo data, and runs again safely:
 
+0. **Wait.** Keycloak (the realm), Payments and Listings (`/healthz`) must each answer 200 first.
+   After a rebuild the PostSync hook can start before they are up; the seed waits up to 10
+   minutes, logging what it still waits for, instead of failing (`app/ready.py`).
 1. **Sellers.** For each entry in Secret `seed-sellers` (Terraform, from `seed_sellers` in
    `secrets.auto.tfvars`), it creates or updates the Keycloak user through the `seed` client,
    which may only manage users. Users are never in a realm file.
