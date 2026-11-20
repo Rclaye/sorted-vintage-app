@@ -14,6 +14,7 @@ import httpx
 from app import catalog, photos
 from app.config import Seller, Settings, from_env
 from app.keycloak import Keycloak
+from app.ready import wait_ready
 from app.site import LabTransport, Log, SeedError, Site, pinned_context
 
 
@@ -107,6 +108,7 @@ def main() -> int:
 
     try:
         with httpx.Client(timeout=30) as http:
+            wait_ready(settings, http, say)
             created = run(settings, http, browser)
     except (SeedError, httpx.HTTPError) as exc:
         say(f"FAIL: {exc}")
